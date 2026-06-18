@@ -191,7 +191,7 @@ static RE_CTRL: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u{0000}-\u{001F}\u{007
 static RE_DQUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[\u{201C}\u{201D}\u{00AB}\u{00BB}\u{201E}\u{201F}]"#).unwrap());
 static RE_SQUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u{2019}\u{2018}\u{201B}]").unwrap());
 static RE_WS: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
-static RE_ALPI: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?i)על פי\s+").unwrap());
+static RE_ALPI: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^על פי\s+").unwrap());
 static RE_TRAIL_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"[.,;:]+$").unwrap());
 static RE_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
 
@@ -280,7 +280,7 @@ fn generate_variants(reference: &str) -> Vec<String> {
     let base = normalize_ref(reference);
     let mut order: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut add = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
+    let add = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
         if seen.insert(v.clone()) {
             order.push(v);
         }
@@ -783,7 +783,7 @@ async fn query_ref_sefaria(client: &reqwest::Client, reference: &str) -> Option<
         urlencode(&spath)
     );
     let resp = client
-        .get(&url)
+        .get(url.as_str())
         .timeout(Duration::from_secs(7))
         .send()
         .await
@@ -1140,7 +1140,7 @@ fn compare_start(
                     let client = client.clone();
                     let sem = sem.clone();
                     set.spawn(async move {
-                        let _permit = sem.acquire().await.unwrap();
+                        let _permit = sem.acquire_owned().await.unwrap();
                         let hit = query_ref_sefaria(&client, &refstr).await;
                         (idx, hit)
                     });
