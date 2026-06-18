@@ -1,0 +1,17 @@
+# ── Rust / Tauri ──────────────────────────────
+/src-tauri/target/
+/src-tauri/gen/
+
+# ── Node ──────────────────────────────────────
+/node_modules/
+npm-debug.log*
+
+# ── Build output ──────────────────────────────
+/dist/
+
+# ── OS / IDE ──────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
