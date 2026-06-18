@@ -1,24 +1,29 @@
 // ══════════════════════════════════════════════════════
-//  אוצריא — בודק מקורות  |  app.js  v7
+//  בודק מקורות  |  main.js  (Tauri)  v4.1
+//  תקשורת Frontend↔Backend: invoke + listen (לא fetch/SSE)
 // ══════════════════════════════════════════════════════
 
-function loadSettings(){try{return JSON.parse(localStorage.getItem('otzaria_settings')||'{}');}catch{return{};}}
-function saveSettings(o){localStorage.setItem('otzaria_settings',JSON.stringify(o));}
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
+// ── אחסון מקומי (הגדרות/היסטוריה/שדות אחרונים) ─────────
+function loadSettings(){try{return JSON.parse(localStorage.getItem('bm_settings')||'{}');}catch{return{};}}
+function saveSettings(o){localStorage.setItem('bm_settings',JSON.stringify(o));}
 let settings=loadSettings();
 
-function loadHistory(){try{return JSON.parse(localStorage.getItem('otzaria_history')||'[]');}catch{return[];}}
+function loadHistory(){try{return JSON.parse(localStorage.getItem('bm_history')||'[]');}catch{return[];}}
 function addHistory(e){
     if(settings.saveHistory===false)return;
     const h=loadHistory();h.unshift({...e,ts:Date.now()});
     if(h.length>50)h.length=50;
-    localStorage.setItem('otzaria_history',JSON.stringify(h));
+    localStorage.setItem('bm_history',JSON.stringify(h));
 }
 
 ['inputFile','dbPath'].forEach(id=>{
     const el=document.getElementById(id);if(!el)return;
-    const saved=localStorage.getItem('otzaria_'+id);
+    const saved=localStorage.getItem('bm_'+id);
     if(saved)el.value=saved;
-    el.addEventListener('input',()=>localStorage.setItem('otzaria_'+id,el.value));
+    el.addEventListener('input',()=>localStorage.setItem('bm_'+id,el.value));
 });
 
 function showPage(name){
@@ -33,6 +38,7 @@ function showPage(name){
 document.querySelectorAll('.nav-link').forEach(a=>
     a.addEventListener('click',e=>{e.preventDefault();showPage(a.dataset.page);}));
 
+// ── טיימר ─────────────────────────────────────────────
 const timerBox=document.getElementById('timerBox');
 const timerEl=document.getElementById('timer');
 let timerInterval=null,startTime=0;
@@ -63,6 +69,16 @@ function getBracketValue(){
     return document.querySelector('input[name="brackets"]:checked')?.value||'curly';
 }
 
+// ── אירועים מ-Rust (נרשמים פעם אחת) ───────────────────
+listen('compare-result',ev=>{
+    const p=ev.payload;if(!p||p.jobId!==activeJobId)return;
+    handleResultEvent(p);
+});
+listen('compare-done',ev=>{
+    const p=ev.payload;if(!p||p.jobId!==activeJobId)return;
+    onStreamComplete(p.summary||{});
+});
+
 // ── Run ───────────────────────────────────────────────
 runButton.addEventListener('click',()=>{
     if(isRunning){stopComparison();return;}
@@ -79,75 +95,41 @@ function startComparison(){
     resultArea.innerHTML='';
     document.getElementById('resultsToolbar')?.remove();
     sortedCache=[];renderedCount=100;lastResults=null;
+    filterQuery='';filterStatus='all';
     startTimer();
 
     runButton.innerHTML=`<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><rect x="4" y="4" width="12" height="12" rx="2"/></svg> עצור`;
     runButton.classList.add('stop-mode');
 
     currentDbPath=dbPathEl.value.trim()||settings.defaultDb||'';
-    const body={
-        inputFile:filePath,
-        options:{
-            hebNums:settings.hebNums!==false,abbrev:settings.abbrev!==false,
-            fuzzy:settings.fuzzy!==false,sefaria:settings.sefaria!==false,
-            brackets:getBracketValue(),
-        }
+    activeJobId=Date.now().toString()+'-'+Math.random().toString(36).slice(2,8);
+
+    const options={
+        hebNums:settings.hebNums!==false,abbrev:settings.abbrev!==false,
+        fuzzy:settings.fuzzy!==false,sefaria:settings.sefaria!==false,
+        brackets:getBracketValue(),
     };
-    if(currentDbPath)body.dbPath=currentDbPath;
 
     resultArea.innerHTML='<div class="compare-list" id="streamList"></div>';
     streamStats={total:0,processed:0,found:0,notFound:0};
 
-    fetch('/compare-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-        .then(res=>{
-            activeJobId=res.headers.get('X-Job-Id');
-            const reader=res.body.getReader();
-            const decoder=new TextDecoder();
-            let buffer='';
-            function read(){
-                reader.read().then(({done,value})=>{
-                    if(done){onStreamEnd();return;}
-                    buffer+=decoder.decode(value,{stream:true});
-                    const lines=buffer.split('\n');
-                    buffer=lines.pop();
-                    let event='message',dataStr='';
-                    for(const line of lines){
-                        if(line.startsWith('event:'))event=line.slice(6).trim();
-                        else if(line.startsWith('data:'))dataStr=line.slice(5).trim();
-                        else if(line===''&&dataStr){
-                            try{handleStreamEvent(event,JSON.parse(dataStr));}catch{}
-                            event='message';dataStr='';
-                        }
-                    }
-                    read();
-                }).catch(()=>onStreamEnd());
-            }
-            read();
-        })
-        .catch(err=>{
-            stopTimer();setStatus('שגיאה: '+err.message,'error');resetRunButton();
-        });
+    invoke('compare_start',{
+        jobId:activeJobId,
+        inputFile:filePath,
+        dbPath:currentDbPath||null,
+        options,
+    }).catch(err=>{
+        stopTimer();setStatus('שגיאה: '+(err?.toString()||err),'error');resetRunButton();isRunning=false;
+    });
 }
 
-function handleStreamEvent(event,payload){
-    if(event==='start'){
-        streamStats={total:0,processed:0,found:0,notFound:0};
-    }
-    else if(event==='result'){
-        const{result,progress}=payload;
-        streamStats={total:progress.total,processed:progress.processed,found:progress.foundCount,notFound:progress.notFoundCount};
-        sortedCache.push(result);
-        setStatus(`מעבד... ${progress.processed}/${progress.total} — נמצאו: ${progress.foundCount} | לא נמצאו: ${progress.notFoundCount}`,'working');
-        updateProgressBar(progress.processed,progress.total);
-        appendResult(result);
-    }
-    else if(event==='done'){
-        onStreamComplete(payload);
-    }
-    else if(event==='error'){
-        setStatus('שגיאה: '+(payload.error||''),'error');
-        resetRunButton();
-    }
+function handleResultEvent(payload){
+    const{idx,result,progress}=payload;
+    streamStats={total:progress.total,processed:progress.processed,found:progress.foundCount,notFound:progress.notFoundCount};
+    sortedCache[idx]=result;
+    setStatus(`מעבד... ${progress.processed}/${progress.total} — נמצאו: ${progress.foundCount} | לא נמצאו: ${progress.notFoundCount}`,'working');
+    updateProgressBar(progress.processed,progress.total);
+    upsertCard(idx,result);
 }
 
 function updateProgressBar(done,total){
@@ -160,38 +142,37 @@ function updateProgressBar(done,total){
     document.getElementById('progressFill').style.width=(total>0?Math.round(done/total*100):0)+'%';
 }
 
-function appendResult(item){
+function upsertCard(idx,item){
     const list=document.getElementById('streamList');if(!list)return;
-    const idx=sortedCache.length-1;
-    const div=document.createElement('div');
-    div.innerHTML=buildCompareCard(item,idx);
-    list.appendChild(div.firstElementChild);
-    div.firstElementChild?.scrollIntoView({behavior:'smooth',block:'nearest'});
-}
-
-function onStreamEnd(){
-    if(!isRunning)return;
-    onStreamComplete({
-        aborted:true,results:sortedCache,
-        totalRefs:streamStats.total||sortedCache.length,
-        foundCount:streamStats.found||sortedCache.filter(r=>r.rows?.length>0).length,
-        notFoundCount:streamStats.notFound||sortedCache.filter(r=>!r.rows?.length).length,
-    });
+    const html=buildCompareCard(item,idx);
+    const existing=document.getElementById('card-'+idx);
+    if(existing){
+        const tmp=document.createElement('div');tmp.innerHTML=html;
+        existing.replaceWith(tmp.firstElementChild);
+    }else{
+        const div=document.createElement('div');div.innerHTML=html;
+        const el=div.firstElementChild;
+        list.appendChild(el);
+        el?.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
 }
 
 function onStreamComplete(summary){
+    if(!isRunning&&!summary)return;
     const elapsed=stopTimer();
     isRunning=false;activeJobId=null;
     resetRunButton();
     document.getElementById('progressBar')?.remove();
     if(summary.error){setStatus('שגיאה: '+summary.error,'error');return;}
+    // צמצום ל-array צפוף (idx עוקבים) למקרה של חורים
+    const dense=sortedCache.filter(x=>x);
     lastResults=summary;
     const aborted=summary.aborted;
-    setStatus(aborted?`הופסק — עובד ${sortedCache.length} הפניות (${elapsed})`:`ההשוואה הסתיימה ✓  (${elapsed})`,aborted?'':'ok');
-    renderSummary({...summary,results:sortedCache});
-    renderToolbar({...summary,results:sortedCache});
+    setStatus(aborted?`הופסק — עובד ${dense.length} הפניות (${elapsed})`:`ההשוואה הסתיימה ✓  (${elapsed})`,aborted?'':'ok');
+    renderSummary({...summary,results:dense});
+    renderToolbar({...summary,results:dense});
     const rank=x=>(x.rows?.length)?(x.matchType==='exact'?2:1):0;
-    sortedCache=[...sortedCache].sort((a,b)=>rank(a)-rank(b));
+    sortedCache=[...dense].sort((a,b)=>rank(a)-rank(b));
     renderResults();
     if(!aborted)addHistory({filePath:inputFileEl.value.trim(),dbPath:currentDbPath,
         totalRefs:summary.totalRefs,foundCount:summary.foundCount,
@@ -200,7 +181,7 @@ function onStreamComplete(summary){
 
 async function stopComparison(){
     if(activeJobId){
-        try{await fetch('/abort',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobId:activeJobId})});}catch{}
+        try{await invoke('compare_abort',{jobId:activeJobId});}catch{}
     }
     isRunning=false;activeJobId=null;
     stopTimer();resetRunButton();
@@ -229,7 +210,6 @@ function highlight(text,query){
 }
 function markRefInSentence(sentence,ref){
     const escaped=ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    // match any bracket type
     return esc(sentence).replace(new RegExp('[{\\[(]'+escaped+'[}\\])]','g'),'<span class="ref-in-sentence">$&</span>');
 }
 function badgeHtml(mt){
@@ -243,7 +223,7 @@ function buildCompareCard(item,idx){
     const badge=badgeHtml(item.matchType);
     const sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
     if(!item.rows?.length){
-        return`<div class="ccard ccard-missing">
+        return`<div class="ccard ccard-missing" id="card-${idx}">
             <div class="ccard-ref-row"><span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}</div>
             <div class="ccard-cols">
                 <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
@@ -254,7 +234,7 @@ function buildCompareCard(item,idx){
     }
     const dbBlocks=item.rows.map((row,ri)=>{
         const contentHtml=highlightPhrase(row.content||'',item.quoteBefore);
-        const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank">🔗 פתח ב-Sefaria</a>`:'';
+        const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
         const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" onclick="expandTalmudPage(${row.lineId},'${esc(row.heRef)}',this)">📖 הרחב לדף מלא</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
         return`<div class="db-match${ri>0?' db-match-sep':''}">
@@ -269,7 +249,7 @@ function buildCompareCard(item,idx){
             <div class="page-expand-area" id="page-${idx}-${ri}" style="display:none"></div>
         </div>`;
     }).join('');
-    return`<div class="ccard">
+    return`<div class="ccard" id="card-${idx}">
         <div class="ccard-ref-row">
             <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}
             ${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}
@@ -372,10 +352,9 @@ async function expandTalmudPage(lineId,heRef,btn){
     if(area.style.display!=='none'){area.style.display='none';btn.textContent='📖 הרחב לדף מלא';return;}
     btn.disabled=true;btn.textContent='טוען...';
     try{
-        const res=await fetch('/expand-page',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineId,dbPath:currentDbPath})});
-        const data=await res.json();
-        if(!res.ok||!data.lines?.length)throw new Error(data.error||'לא נמצא');
-        const linesHtml=data.lines.map(l=>`<div class="page-line${l.isFocus?' page-line-focus':''}">
+        const lines=await invoke('expand_page',{lineId,dbPath:currentDbPath||null});
+        if(!lines?.length)throw new Error('לא נמצא');
+        const linesHtml=lines.map(l=>`<div class="page-line${l.isFocus?' page-line-focus':''}">
             <span class="page-line-ref">${esc(l.heRef||'')}</span>
             <span class="page-line-content">${l.isFocus?`<strong>${esc(l.content)}</strong>`:esc(l.content)}</span>
         </div>`).join('');
@@ -389,19 +368,20 @@ async function expandTalmudPage(lineId,heRef,btn){
         area.scrollIntoView({behavior:'smooth',block:'nearest'});
         btn.textContent='▲ סגור דף';
     }catch(err){
-        area.innerHTML=`<div style="color:var(--red);padding:8px">שגיאה: ${esc(err.message)}</div>`;
+        area.innerHTML=`<div style="color:var(--red);padding:8px">שגיאה: ${esc(err?.toString()||err)}</div>`;
         area.style.display='';btn.textContent='📖 הרחב לדף מלא';
     }finally{btn.disabled=false;}
 }
 
-// ── Browse file ───────────────────────────────────────
+// ── Browse file (דיאלוג native של Tauri) ───────────────
 async function browseFile(type){
     try{
-        const res=await fetch('/browse-file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type})});
-        const data=await res.json();if(!data.path)return;
-        if(type==='txt'){document.getElementById('inputFile').value=data.path;localStorage.setItem('otzaria_inputFile',data.path);}
-        else if(type==='db'){document.getElementById('dbPath').value=data.path;localStorage.setItem('otzaria_dbPath',data.path);}
-        else if(type==='db-settings'){document.getElementById('settingsDbPath').value=data.path;}
+        const filter=(type==='db'||type==='db-settings')?'db':'txt';
+        const path=await invoke('pick_file',{filter});
+        if(!path)return;
+        if(type==='txt'){document.getElementById('inputFile').value=path;localStorage.setItem('bm_inputFile',path);}
+        else if(type==='db'){document.getElementById('dbPath').value=path;localStorage.setItem('bm_dbPath',path);}
+        else if(type==='db-settings'){document.getElementById('settingsDbPath').value=path;}
     }catch(e){console.error('browse error:',e);}
 }
 
@@ -416,10 +396,10 @@ function exportData(format){
             if(!item.rows?.length)rows.push([item.ref,item.sentence||'','לא נמצא','','','']);
             else item.rows.forEach(r=>rows.push([item.ref,item.sentence||'',item.matchType,r.bookTitle,r.heRef,(r.content||'').substring(0,200)]));
         });
-        content='\uFEFF'+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+        content='﻿'+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n');
         filename='compare_sources.csv';mime='text/csv;charset=utf-8';
     }else{
-        const lines=['דוח בודק מקורות אוצריא','='.repeat(50),''];
+        const lines=['דוח בודק מקורות','='.repeat(50),''];
         filtered.forEach(item=>{
             lines.push('─'.repeat(50),'הפניה: '+item.ref);
             if(item.sentence)lines.push('הקשר: '+item.sentence);
@@ -465,12 +445,12 @@ function renderHistory(){
 function loadFromHistory(idx){
     const h=loadHistory()[idx];if(!h)return;
     const ie=document.getElementById('inputFile');const de=document.getElementById('dbPath');
-    if(ie){ie.value=h.filePath;localStorage.setItem('otzaria_inputFile',h.filePath);}
-    if(de&&h.dbPath){de.value=h.dbPath;localStorage.setItem('otzaria_dbPath',h.dbPath);}
+    if(ie){ie.value=h.filePath;localStorage.setItem('bm_inputFile',h.filePath);}
+    if(de&&h.dbPath){de.value=h.dbPath;localStorage.setItem('bm_dbPath',h.dbPath);}
     showPage('compare');
 }
 document.getElementById('clearHistoryBtn')?.addEventListener('click',()=>{
-    if(confirm('למחוק את כל ההיסטוריה?')){localStorage.removeItem('otzaria_history');renderHistory();}
+    if(confirm('למחוק את כל ההיסטוריה?')){localStorage.removeItem('bm_history');renderHistory();}
 });
 
 // ── Settings ──────────────────────────────────────────
@@ -489,5 +469,12 @@ document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>{
     const saved=document.getElementById('settingsSaved');
     if(saved){saved.style.display='flex';setTimeout(()=>saved.style.display='none',2500);}
 });
+
+// expose for inline handlers
+window.browseFile=browseFile;
+window.expandTalmudPage=expandTalmudPage;
+window.exportData=exportData;
+window.loadMore=loadMore;
+window.loadFromHistory=loadFromHistory;
 
 loadSettingsUI();

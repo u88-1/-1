@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>בודק מקורות אוצריא</title>
+    <title>בודק מקורות</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;700;900&family=Heebo:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css" />
@@ -13,7 +13,7 @@
     <aside class="sidebar">
         <div class="brand">
             <div class="brand-mark">📖</div>
-            <div class="brand-name">אוצ<span>ריא</span></div>
+            <div class="brand-name">בודק <span>מקורות</span></div>
         </div>
         <nav class="nav">
             <a class="nav-link active" href="#" data-page="compare">
@@ -33,7 +33,7 @@
                 הגדרות
             </a>
         </nav>
-        <div class="sidebar-bottom">v4.0</div>
+        <div class="sidebar-bottom">v4.1 · Tauri</div>
     </aside>
 
     <main class="main">
@@ -101,19 +101,19 @@
         <!-- ══ PAGE: אודות ══ -->
         <div id="page-about" class="page" style="display:none">
             <header class="page-header">
-                <div><div class="header-ornament">✦ ✡ ✦</div><h1 class="page-title">אודות <span>אוצריא</span></h1><div class="gold-line"></div></div>
+                <div><div class="header-ornament">✦ ✡ ✦</div><h1 class="page-title">אודות <span>בודק מקורות</span></h1><div class="gold-line"></div></div>
             </header>
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
-                <div class="about-title">בודק מקורות אוצריא</div>
-                <div class="about-version">גרסה 4.0</div>
+                <div class="about-title">בודק מקורות</div>
+                <div class="about-version">גרסה 4.1 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
                 </div>
                 <div class="about-features">
-                    <div class="about-feature"><span class="about-feat-icon">📄</span><div><strong>תמיכה במגוון קבצים</strong><span>טקסט רגיל (.txt), Word (.docx) ו-PDF עם OCR</span></div></div>
-                    <div class="about-feature"><span class="about-feat-icon">🔍</span><div><strong>חיפוש חכם</strong><span>נרמול מספרים עבריים, פיתוח קיצורי מסכתות, חיפוש מטושטש</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">📄</span><div><strong>תמיכה במגוון קבצים</strong><span>טקסט רגיל (.txt), Word (.docx) ו-PDF (חילוץ טקסט)</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">🔍</span><div><strong>חיפוש חכם</strong><span>נרמול מספרים עבריים, פיתוח קיצורי מסכתות, חיפוש מטושטש (FTS5)</span></div></div>
                     <div class="about-feature"><span class="about-feat-icon">⚡</span><div><strong>הצגה בזמן אמת</strong><span>כל תוצאה מוצגת ברגע שנמצאת, עם אפשרות לעצור באמצע</span></div></div>
                     <div class="about-feature"><span class="about-feat-icon">📊</span><div><strong>השוואה חזותית</strong><span>הציטוט מהמקור לצד הטקסט מהמאגר</span></div></div>
                     <div class="about-feature"><span class="about-feat-icon">📖</span><div><strong>הרחבת דף גמרא</strong><span>לש"ס בבלי — אפשרות לפתוח את הדף המלא</span></div></div>
@@ -179,6 +179,6 @@
         </div>
     </main>
 </div>
-<script src="app.js"></script>
+<script src="main.js"></script>
 </body>
 </html>

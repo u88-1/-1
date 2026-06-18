@@ -1,0 +1,55 @@
+[package]
+name = "bodek-mekorot"
+version = "4.1.0"
+description = "בודק מקורות — בדיקת הפניות אוטומטית בספרות תורנית"
+authors = ["Otzaria Source Checker contributors"]
+license = "GPL-3.0"
+repository = "https://github.com/u88-1/-1"
+edition = "2021"
+rust-version = "1.77"
+
+# קובץ הבינארי הראשי
+[[bin]]
+name = "bodek-mekorot"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# ── Tauri core + plugins ──────────────────────────────────────────────
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"            # דיאלוג בחירת קובץ native (pick_file)
+
+# ── Serialization ─────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ── מסד נתונים (סינכרוני, ללא async pool) ──────────────────────────────
+# "bundled" מקמפל SQLite מובנה עם FTS5 מאופשר — אין תלות במערכת.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# ── Async runtime ל-Sefaria fallback בלבד ─────────────────────────────
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# ── Regex ─────────────────────────────────────────────────────────────
+# fancy-regex נדרש ל-lookbehind/lookahead שבמנוע הנרמול (regex הרגיל לא תומך)
+regex = "1"
+fancy-regex = "0.13"
+once_cell = "1"
+
+# ── חילוץ טקסט מקבצים ─────────────────────────────────────────────────
+zip = "2"               # .docx (zip של word/document.xml)
+pdf-extract = "0.7"     # .pdf (חילוץ טקסט קיים, לא OCR)
+
+[features]
+# מאפשר custom-protocol בבניית release (ברירת מחדל של tauri)
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"     # בינארי קטן יותר
+codegen-units = 1
+lto = true
+opt-level = "s"     # אופטימיזציה לגודל — מתאים למטרת "קל ומהיר"
+strip = true

@@ -1,0 +1,1375 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  בודק מקורות  —  Tauri (Rust) core
+//  פורט מלא של compare_sources.js: חילוץ, נרמול, וריאנטים, התאמה ב-SQLite + FTS5,
+//  נפילה ל-Sefaria, והרחבת דף גמרא. מנוע סינכרוני (rusqlite) + Mutex<Connection>.
+// ════════════════════════════════════════════════════════════════════════════
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use fancy_regex::Regex as FRegex;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use rusqlite::{params, Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
+const MAX_RESULTS_PER_REF: i64 = 5;
+const SEFARIA_CONCURRENCY: usize = 6;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  1. נתוני ליבה — מסכתות, גימטריה, קיצורים, מיפוי Sefaria
+// ════════════════════════════════════════════════════════════════════════════
+
+static BAVLI_TRACTATES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+    vec![
+        "ברכות", "שבת", "עירובין", "פסחים", "שקלים", "יומא", "סוכה", "ביצה",
+        "ראש השנה", "תענית", "מגילה", "מועד קטן", "חגיגה", "יבמות", "כתובות",
+        "נדרים", "נזיר", "סוטה", "גיטין", "קידושין", "בבא קמא", "בבא מציעא",
+        "בבא בתרא", "סנהדרין", "מכות", "שבועות", "עדויות", "עבודה זרה", "אבות",
+        "הוריות", "זבחים", "מנחות", "חולין", "בכורות", "ערכין", "תמורה", "כריתות",
+        "מעילה", "תמיד", "מידות", "קינים", "נדה",
+    ]
+});
+
+fn heb_val(ch: char) -> Option<i64> {
+    Some(match ch {
+        'א' => 1, 'ב' => 2, 'ג' => 3, 'ד' => 4, 'ה' => 5, 'ו' => 6, 'ז' => 7,
+        'ח' => 8, 'ט' => 9, 'י' => 10, 'כ' | 'ך' => 20, 'ל' => 30, 'מ' | 'ם' => 40,
+        'נ' | 'ן' => 50, 'ס' => 60, 'ע' => 70, 'פ' | 'ף' => 80, 'צ' | 'ץ' => 90,
+        'ק' => 100, 'ר' => 200, 'ש' => 300, 'ת' => 400,
+        _ => return None,
+    })
+}
+
+/// המרת מחרוזת אותיות עבריות למספר (גימטריה). מחזיר None אם יש תו לא-המרה.
+fn hebrew_to_number(s: &str) -> Option<i64> {
+    let clean: String = s.chars().filter(|c| !matches!(c, '״' | '׳' | '"' | '\'')).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let mut sum = 0i64;
+    for ch in clean.chars() {
+        match heb_val(ch) {
+            Some(v) => sum += v,
+            None => return None,
+        }
+    }
+    if sum > 0 {
+        Some(sum)
+    } else {
+        None
+    }
+}
+
+// קיצורי מסכתות → שם מלא. ממוין בהמשך מהארוך לקצר.
+fn tractate_pairs() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("ברכות", "ברכות"), ("ברכ'", "ברכות"),
+        ("שבת", "שבת"), ("שב'", "שבת"),
+        ("עירובין", "עירובין"), ("עירו'", "עירובין"),
+        ("פסחים", "פסחים"), ("פסח'", "פסחים"),
+        ("שקלים", "שקלים"), ("יומא", "יומא"), ("סוכה", "סוכה"), ("ביצה", "ביצה"),
+        ("ראש השנה", "ראש השנה"), ("ר\"ה", "ראש השנה"),
+        ("תענית", "תענית"), ("תענ'", "תענית"),
+        ("מגילה", "מגילה"), ("מגיל'", "מגילה"),
+        ("מועד קטן", "מועד קטן"), ("מו\"ק", "מועד קטן"),
+        ("חגיגה", "חגיגה"), ("חגיג'", "חגיגה"),
+        ("יבמות", "יבמות"), ("יבמ'", "יבמות"),
+        ("כתובות", "כתובות"), ("כתוב'", "כתובות"),
+        ("נדרים", "נדרים"), ("נדר'", "נדרים"),
+        ("נזיר", "נזיר"), ("סוטה", "סוטה"),
+        ("גיטין", "גיטין"), ("גיט'", "גיטין"),
+        ("קידושין", "קידושין"), ("קיד'", "קידושין"),
+        ("בבא קמא", "בבא קמא"), ("ב\"ק", "בבא קמא"), ("ב'ק", "בבא קמא"),
+        ("בבא מציעא", "בבא מציעא"), ("ב\"מ", "בבא מציעא"), ("ב'מ", "בבא מציעא"),
+        ("בבא בתרא", "בבא בתרא"), ("ב\"ב", "בבא בתרא"), ("ב'ב", "בבא בתרא"),
+        ("סנהדרין", "סנהדרין"), ("סנה'", "סנהדרין"),
+        ("מכות", "מכות"), ("שבועות", "שבועות"), ("שבוע'", "שבועות"),
+        ("עדויות", "עדויות"), ("עבודה זרה", "עבודה זרה"), ("ע\"ז", "עבודה זרה"),
+        ("אבות", "אבות"), ("הוריות", "הוריות"),
+        ("זבחים", "זבחים"), ("זבח'", "זבחים"),
+        ("מנחות", "מנחות"), ("מנח'", "מנחות"),
+        ("חולין", "חולין"), ("חול'", "חולין"),
+        ("בכורות", "בכורות"), ("בכור'", "בכורות"),
+        ("ערכין", "ערכין"), ("תמורה", "תמורה"),
+        ("כריתות", "כריתות"), ("כרית'", "כריתות"),
+        ("מעילה", "מעילה"), ("תמיד", "תמיד"), ("נדה", "נדה"),
+    ]
+}
+
+// רשימת (regex מקומפל לתחילת מחרוזת, שם מלא) — ממוין מהארוך לקצר.
+static ABBREV_RES: Lazy<Vec<(FRegex, String)>> = Lazy::new(|| {
+    let mut pairs = tractate_pairs();
+    pairs.sort_by(|a, b| b.0.chars().count().cmp(&a.0.chars().count()));
+    pairs
+        .into_iter()
+        .map(|(abbr, target)| {
+            let escaped = regex_escape(abbr);
+            // עוקב אחרי רווח / פסיק / נקודה / סוף-מחרוזת (lookahead)
+            let re = FRegex::new(&format!(r"(?i)^{}(?=[\s,.]|$)", escaped)).unwrap();
+            (re, target.to_string())
+        })
+        .collect()
+});
+
+static SEFARIA_EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    HashMap::from([
+        ("ברכות", "Berakhot"), ("שבת", "Shabbat"), ("עירובין", "Eruvin"),
+        ("פסחים", "Pesachim"), ("שקלים", "Shekalim"), ("יומא", "Yoma"),
+        ("סוכה", "Sukkah"), ("ביצה", "Beitzah"), ("ראש השנה", "Rosh Hashanah"),
+        ("תענית", "Taanit"), ("מגילה", "Megillah"), ("מועד קטן", "Moed Katan"),
+        ("חגיגה", "Chagigah"), ("יבמות", "Yevamot"), ("כתובות", "Ketubot"),
+        ("נדרים", "Nedarim"), ("נזיר", "Nazir"), ("סוטה", "Sotah"),
+        ("גיטין", "Gittin"), ("קידושין", "Kiddushin"), ("בבא קמא", "Bava Kamma"),
+        ("בבא מציעא", "Bava Metzia"), ("בבא בתרא", "Bava Batra"),
+        ("סנהדרין", "Sanhedrin"), ("מכות", "Makkot"), ("שבועות", "Shevuot"),
+        ("עבודה זרה", "Avodah Zarah"), ("הוריות", "Horayot"), ("זבחים", "Zevachim"),
+        ("מנחות", "Menachot"), ("חולין", "Chullin"), ("בכורות", "Bekhorot"),
+        ("ערכין", "Arakhin"), ("תמורה", "Temurah"), ("כריתות", "Keritot"),
+        ("מעילה", "Meilah"), ("תמיד", "Tamid"), ("נדה", "Niddah"),
+        ("בראשית", "Genesis"), ("שמות", "Exodus"), ("ויקרא", "Leviticus"),
+        ("במדבר", "Numbers"), ("דברים", "Deuteronomy"), ("יהושע", "Joshua"),
+        ("שופטים", "Judges"), ("תהלים", "Psalms"), ("משלי", "Proverbs"),
+        ("איוב", "Job"), ("שיר השירים", "Song of Songs"), ("רות", "Ruth"),
+        ("איכה", "Lamentations"), ("קהלת", "Ecclesiastes"), ("אסתר", "Esther"),
+        ("דניאל", "Daniel"), ("עזרא", "Ezra"), ("נחמיה", "Nehemiah"),
+    ])
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  2. עזרי regex + נרמול
+// ════════════════════════════════════════════════════════════════════════════
+
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for ch in s.chars() {
+        if ".*+?^${}()|[]\\".contains(ch) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// replace_all עם closure עבור fancy-regex (ללא תלות ב-Replacer trait).
+fn fre_replace_all<F>(re: &FRegex, text: &str, mut f: F) -> String
+where
+    F: FnMut(&fancy_regex::Captures) -> String,
+{
+    let mut out = String::new();
+    let mut last = 0usize;
+    for cap in re.captures_iter(text) {
+        let cap = match cap {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+        let m = cap.get(0).unwrap();
+        out.push_str(&text[last..m.start()]);
+        out.push_str(&f(&cap));
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+fn cap_str<'a>(cap: &'a fancy_regex::Captures, i: usize) -> &'a str {
+    cap.get(i).map(|m| m.as_str()).unwrap_or("")
+}
+
+// regex לנרמול (regex רגיל — ללא lookaround)
+static RE_CTRL: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u{0000}-\u{001F}\u{007F}]").unwrap());
+static RE_DQUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[\u{201C}\u{201D}\u{00AB}\u{00BB}\u{201E}\u{201F}]"#).unwrap());
+static RE_SQUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u{2019}\u{2018}\u{201B}]").unwrap());
+static RE_WS: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+static RE_ALPI: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^על פי\s+").unwrap());
+static RE_TRAIL_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"[.,;:]+$").unwrap());
+static RE_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
+
+fn strip_tags(s: &str) -> String {
+    RE_TAGS.replace_all(s, "").trim().to_string()
+}
+
+/// נרמול הפניה: הסרת בקרה, איחוד גרשיים, כיווץ רווחים, הסרת "על פי" ופיסוק קצה.
+fn normalize_ref(input: &str) -> String {
+    let s = RE_CTRL.replace_all(input, "");
+    let s = RE_DQUOTE.replace_all(&s, "\"");
+    let s = RE_SQUOTE.replace_all(&s, "'");
+    let s = RE_WS.replace_all(&s, " ");
+    let s = RE_ALPI.replace(&s, "");
+    let s = RE_TRAIL_PUNCT.replace(&s, "");
+    s.trim().to_string()
+}
+
+// fancy-regex עבור נרמול מספרים/דפי גמרא/קיצורים (דורש lookaround)
+static RE_HEBNUM: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r#"(?<![א-ת])([א-ת׳״"']{1,6})(?![א-ת])"#).unwrap());
+static RE_PAGE_A: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?א"#).unwrap());
+static RE_PAGE_B: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?ב"#).unwrap());
+static RE_PAGE_DIGIT: Lazy<FRegex> = Lazy::new(|| FRegex::new(r"(\d+)([אב])\b").unwrap());
+static RE_PAGE_HEBDOT: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r"([א-ת]{1,4})([.:])(?!\d)").unwrap());
+
+/// החלפת רצפי אותיות עבריות (לא חלק ממילה ארוכה) במספר גימטרי.
+fn replace_hebrew_numbers(text: &str) -> String {
+    fre_replace_all(&RE_HEBNUM, text, |c| {
+        let m = cap_str(c, 0);
+        match hebrew_to_number(m) {
+            Some(n) if n > 0 => n.to_string(),
+            _ => m.to_string(),
+        }
+    })
+}
+
+fn norm_page(pg: &str, dot: char) -> String {
+    let n = if pg.chars().all(|c| c.is_ascii_digit()) {
+        pg.to_string()
+    } else {
+        match hebrew_to_number(pg) {
+            Some(v) => v.to_string(),
+            None => pg.to_string(),
+        }
+    };
+    format!("{}{}", n, dot)
+}
+
+/// נרמול עמוד גמרא לפורמט קנוני "<מספר>." (ע"א) / "<מספר>:" (ע"ב).
+fn normalize_talmud_page(input: &str) -> String {
+    let s = fre_replace_all(&RE_PAGE_A, input, |c| norm_page(cap_str(c, 1), '.'));
+    let s = fre_replace_all(&RE_PAGE_B, &s, |c| norm_page(cap_str(c, 1), ':'));
+    let s = fre_replace_all(&RE_PAGE_DIGIT, &s, |c| {
+        let n = cap_str(c, 1);
+        let side = cap_str(c, 2);
+        format!("{}{}", n, if side == "א" { "." } else { ":" })
+    });
+    fre_replace_all(&RE_PAGE_HEBDOT, &s, |c| {
+        let heb = cap_str(c, 1);
+        let dot = cap_str(c, 2);
+        match hebrew_to_number(heb) {
+            Some(n) => format!("{}{}", n, dot),
+            None => format!("{}{}", heb, dot),
+        }
+    })
+}
+
+/// פיתוח קיצור מסכת בתחילת ההפניה (אם זוהה). מחזיר וריאנט/ים.
+fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
+    let trimmed = input.trim();
+    for (re, target) in ABBREV_RES.iter() {
+        if re.is_match(trimmed).unwrap_or(false) {
+            let replaced = fre_replace_all(re, trimmed, |_| target.clone());
+            return vec![replaced];
+        }
+    }
+    vec![input.to_string()]
+}
+
+/// בניית סט וריאנטים לחיפוש (סדר עדיפות נשמר, ללא כפילויות).
+fn generate_variants(reference: &str) -> Vec<String> {
+    let base = normalize_ref(reference);
+    let mut order: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let add = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if seen.insert(v.clone()) {
+            order.push(v);
+        }
+    };
+    add(base.clone(), &mut order, &mut seen);
+
+    let wp = normalize_talmud_page(&base);
+    if wp != base {
+        add(wp, &mut order, &mut seen);
+    }
+    for v in order.clone() {
+        let wa = replace_hebrew_numbers(&v);
+        if wa != v {
+            add(wa, &mut order, &mut seen);
+        }
+    }
+    for v in order.clone() {
+        for e in expand_tractate_abbreviations(&v) {
+            add(e.clone(), &mut order, &mut seen);
+            let ea = replace_hebrew_numbers(&e);
+            if ea != e {
+                add(ea, &mut order, &mut seen);
+            }
+            let ep = normalize_talmud_page(&e);
+            if ep != e {
+                add(ep.clone(), &mut order, &mut seen);
+                let epa = replace_hebrew_numbers(&ep);
+                if epa != ep {
+                    add(epa, &mut order, &mut seen);
+                }
+            }
+        }
+    }
+    order
+}
+
+fn detect_bavli(reference: &str) -> Option<String> {
+    let norm = normalize_ref(reference);
+    BAVLI_TRACTATES
+        .iter()
+        .find(|t| norm.starts_with(*t))
+        .map(|t| t.to_string())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  3. חילוץ הפניות + הקשר מהטקסט
+// ════════════════════════════════════════════════════════════════════════════
+
+fn bracket_chars(brackets: &str) -> (char, char) {
+    match brackets {
+        "square" => ('[', ']'),
+        "round" => ('(', ')'),
+        _ => ('{', '}'),
+    }
+}
+
+#[derive(Clone)]
+struct RefCtx {
+    reference: String,
+    sentence: String,
+    quote_before: String,
+}
+
+static RE_QUOTE1: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?s)["״“”]([\s\S]{2,80})["״“”]?\s*$"#).unwrap());
+static RE_QUOTE2: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)[–—]\s*([\s\S]{2,60})\s*$").unwrap());
+
+/// חילוץ המשפט המכיל את ההפניה + ציטוט שקדם לה (להדגשה).
+fn extract_context(full_chars: &[char], raw: &str, open: char, close: char) -> (String, String) {
+    // needle = open + raw + close (חיפוש ליטרלי, בטוח ל-UTF-8)
+    let needle: Vec<char> = std::iter::once(open)
+        .chain(raw.chars())
+        .chain(std::iter::once(close))
+        .collect();
+    let n = needle.len();
+    if n == 0 || full_chars.len() < n {
+        return (String::new(), String::new());
+    }
+    let mut found: Option<usize> = None;
+    for i in 0..=(full_chars.len() - n) {
+        if full_chars[i..i + n] == needle[..] {
+            found = Some(i);
+            break;
+        }
+    }
+    let pos = match found {
+        Some(p) => p,
+        None => return (String::new(), String::new()),
+    };
+    let after = pos + n;
+    let mut start = pos;
+    while start > 0 && !matches!(full_chars[start - 1], '.' | '\n') {
+        start -= 1;
+    }
+    let mut end = after;
+    while end < full_chars.len() && !matches!(full_chars[end], '.' | '\n') {
+        end += 1;
+    }
+    let sentence: String = full_chars[start..end].iter().collect::<String>().trim().to_string();
+    let before_start = pos.saturating_sub(200);
+    let before: String = full_chars[before_start..pos].iter().collect();
+    let quote = RE_QUOTE1
+        .captures(&before)
+        .or_else(|| RE_QUOTE2.captures(&before))
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .unwrap_or_default();
+    (sentence, quote)
+}
+
+fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
+    let (open, close) = bracket_chars(brackets);
+    let eo = regex_escape(&open.to_string());
+    let ec = regex_escape(&close.to_string());
+    let re = Regex::new(&format!("{}([^{}]+){}", eo, ec, ec)).unwrap();
+    let full_chars: Vec<char> = text.chars().collect();
+    let mut refs = Vec::new();
+    for cap in re.captures_iter(text) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let reference = normalize_ref(raw);
+        if reference.is_empty() {
+            continue;
+        }
+        let (sentence, quote_before) = extract_context(&full_chars, raw, open, close);
+        refs.push(RefCtx {
+            reference,
+            sentence,
+            quote_before,
+        });
+    }
+    refs
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  4. חילוץ טקסט מקבצים (txt / docx / pdf)
+// ════════════════════════════════════════════════════════════════════════════
+
+fn decode_xml_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+static RE_WT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<w:t[^>]*>(.*?)</w:t>").unwrap());
+
+fn extract_docx(path: &str) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut xml = String::new();
+    zip.by_name("word/document.xml")
+        .map_err(|e| e.to_string())?
+        .read_to_string(&mut xml)
+        .map_err(|e| e.to_string())?;
+    let xml = xml.replace("</w:p>", "\n");
+    let mut out = String::new();
+    for cap in RE_WT.captures_iter(&xml) {
+        out.push_str(&decode_xml_entities(&cap[1]));
+    }
+    Ok(out)
+}
+
+fn extract_text(path: &str) -> Result<String, String> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "txt" => std::fs::read_to_string(path).map_err(|e| e.to_string()),
+        "docx" => extract_docx(path),
+        "pdf" => pdf_extract::extract_text(path).map_err(|e| e.to_string()),
+        _ => std::fs::read_to_string(path).map_err(|e| e.to_string()),
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  5. שכבת DB — סכמה דינמית (camelCase של אוצריא או snake_case), חיבור יחיד
+// ════════════════════════════════════════════════════════════════════════════
+
+struct Schema {
+    he_ref: String,
+    line_index: String,
+    content: String,
+    book_id: String,
+    title: String,
+    file_path: String,
+}
+
+struct OpenDb {
+    path: String,
+    conn: Connection,
+    schema: Schema,
+    fts: bool,
+}
+
+fn line_columns(conn: &Connection) -> Vec<String> {
+    let mut cols = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(line)") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
+            for c in rows.flatten() {
+                cols.push(c);
+            }
+        }
+    }
+    cols
+}
+
+fn book_columns(conn: &Connection) -> Vec<String> {
+    let mut cols = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(book)") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
+            for c in rows.flatten() {
+                cols.push(c);
+            }
+        }
+    }
+    cols
+}
+
+fn detect_schema(conn: &Connection) -> Schema {
+    let lc = line_columns(conn);
+    let bc = book_columns(conn);
+    let has = |cols: &[String], name: &str| cols.iter().any(|c| c == name);
+    Schema {
+        he_ref: if has(&lc, "heRef") { "heRef" } else { "he_ref" }.to_string(),
+        line_index: if has(&lc, "lineIndex") { "lineIndex" } else { "line_index" }.to_string(),
+        content: "content".to_string(),
+        book_id: if has(&lc, "bookId") { "bookId" } else { "book_id" }.to_string(),
+        title: "title".to_string(),
+        file_path: if has(&bc, "filePath") { "filePath" } else { "file_path" }.to_string(),
+    }
+}
+
+fn detect_fts(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='line_fts'",
+        [],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+fn open_db(path: &str) -> Result<OpenDb, String> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| format!("שגיאה בפתיחת DB: {e}"))?;
+
+    // Pragmas לביצועים — best-effort (חלקם עלולים להיכשל על DB קריאה-בלבד).
+    for pragma in [
+        "PRAGMA query_only = ON;",
+        "PRAGMA cache_size = -64000;",
+        "PRAGMA temp_store = MEMORY;",
+        "PRAGMA mmap_size = 268435456;",
+    ] {
+        let _ = conn.execute_batch(pragma);
+    }
+
+    let schema = detect_schema(&conn);
+    let fts = detect_fts(&conn);
+    Ok(OpenDb {
+        path: path.to_string(),
+        conn,
+        schema,
+        fts,
+    })
+}
+
+/// וידוא שחיבור פתוח ל-path המבוקש (פותח מחדש רק אם הנתיב השתנה).
+fn ensure_db(guard: &mut Option<OpenDb>, path: &str) -> Result<(), String> {
+    let need = match guard {
+        Some(o) => o.path != path,
+        None => true,
+    };
+    if need {
+        *guard = Some(open_db(path)?);
+    }
+    Ok(())
+}
+
+struct RawRow {
+    line_id: i64,
+    line_index: i64,
+    he_ref: String,
+    content: String,
+    book_title: String,
+    book_path: Option<String>,
+}
+
+fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
+    Ok(RawRow {
+        line_id: r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+        line_index: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+        he_ref: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        content: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        book_title: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        book_path: r.get::<_, Option<String>>(5)?,
+    })
+}
+
+fn select_prefix(s: &Schema) -> String {
+    format!(
+        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
+         b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
+        li = s.line_index,
+        hr = s.he_ref,
+        ct = s.content,
+        ti = s.title,
+        fp = s.file_path,
+        bid = s.book_id
+    )
+}
+
+/// בניית שאילתת FTS5 בטוחה (phrase match) מתוך וריאנט.
+fn fts_query(v: &str) -> String {
+    format!("\"{}\"", v.replace('"', "\"\""))
+}
+
+fn collect(
+    stmt: &mut rusqlite::Statement,
+    bind: &str,
+    match_type: &str,
+    seen: &mut HashSet<i64>,
+    out: &mut Vec<RowOut>,
+) -> rusqlite::Result<()> {
+    let rows = stmt.query_map(params![bind, MAX_RESULTS_PER_REF], map_raw)?;
+    for row in rows {
+        let raw = row?;
+        if seen.insert(raw.line_id) {
+            out.push(RowOut {
+                he_ref: raw.he_ref,
+                book_title: raw.book_title,
+                file_path: raw.book_path,
+                line_index: Some(raw.line_index),
+                line_id: Some(raw.line_id),
+                content: strip_tags(&raw.content),
+                match_type: match_type.to_string(),
+                sefaria_url: None,
+            });
+        }
+    }
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  6. מבני פלט (JSON ל-Frontend)  — camelCase
+// ════════════════════════════════════════════════════════════════════════════
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RowOut {
+    he_ref: String,
+    book_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_id: Option<i64>,
+    content: String,
+    match_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sefaria_url: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ResultOut {
+    #[serde(rename = "ref")]
+    reference: String,
+    match_type: String,
+    variants_tried: Vec<String>,
+    rows: Vec<RowOut>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row: Option<RowOut>,
+    source: String,
+    sentence: String,
+    quote_before: String,
+    is_bavli: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Progress {
+    total: usize,
+    processed: usize,
+    found_count: i64,
+    not_found_count: i64,
+    #[serde(skip_serializing_if = "is_false")]
+    sefaria_update: bool,
+}
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResultEnvelope<'a> {
+    job_id: &'a str,
+    idx: usize,
+    result: &'a ResultOut,
+    progress: Progress,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Summary {
+    total_refs: usize,
+    found_count: i64,
+    not_found_count: i64,
+    sefaria_found_count: i64,
+    aborted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoneEnvelope {
+    job_id: String,
+    summary: Summary,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LineRowOut {
+    line_id: i64,
+    line_index: i64,
+    he_ref: String,
+    content: String,
+    is_focus: bool,
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  7. Sefaria fallback
+// ════════════════════════════════════════════════════════════════════════════
+
+static RE_SEFARIA: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(.+?)\s+(\d+|[א-ת]{1,4})\s*[,.:]\s*(\d+|[א-ת]{1,4}\.?:?)?$")
+        .unwrap()
+});
+
+fn ref_to_sefaria_path(reference: &str) -> Option<String> {
+    let norm = normalize_ref(reference);
+    let caps = RE_SEFARIA.captures(&norm)?;
+    let book = caps.get(1)?.as_str().trim();
+    let ch = caps.get(2)?.as_str();
+    let en_book = SEFARIA_EN.get(book)?;
+    let ch_clean: String = ch.chars().filter(|c| !matches!(c, '.' | ':' | '\'' | '״' | '׳')).collect();
+    let ch_n = hebrew_to_number(&ch_clean).or_else(|| ch_clean.parse::<i64>().ok())?;
+    if ch_n == 0 {
+        return None;
+    }
+    match caps.get(3).map(|m| m.as_str()).filter(|s| !s.is_empty()) {
+        None => Some(format!("{}.{}", en_book, ch_n)),
+        Some(vs) => {
+            let vs_clean: String = vs.chars().filter(|c| !matches!(c, '.' | ':' | '\'' | '״' | '׳')).collect();
+            match hebrew_to_number(&vs_clean).or_else(|| vs_clean.parse::<i64>().ok()) {
+                Some(vs_n) if vs_n > 0 => Some(format!("{}.{}.{}", en_book, ch_n, vs_n)),
+                _ => Some(format!("{}.{}", en_book, ch_n)),
+            }
+        }
+    }
+}
+
+struct SefariaHit {
+    content: String,
+    he_ref: String,
+    book_title: String,
+    url: String,
+}
+
+fn flatten_he(v: &serde_json::Value, out: &mut String) {
+    match v {
+        serde_json::Value::String(s) => {
+            if !s.is_empty() {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(s);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                flatten_he(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn query_ref_sefaria(client: &reqwest::Client, reference: &str) -> Option<SefariaHit> {
+    let spath = ref_to_sefaria_path(reference)?;
+    let url = format!(
+        "https://www.sefaria.org/api/texts/{}?lang=he&context=0",
+        urlencode(&spath)
+    );
+    let resp = client
+        .get(url.as_str())
+        .timeout(Duration::from_secs(7))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: serde_json::Value = resp.json().await.ok()?;
+    let mut raw = String::new();
+    flatten_he(data.get("he").unwrap_or(&serde_json::Value::Null), &mut raw);
+    if raw.is_empty() {
+        flatten_he(data.get("text").unwrap_or(&serde_json::Value::Null), &mut raw);
+    }
+    let content = strip_tags(&raw);
+    if content.is_empty() {
+        return None;
+    }
+    let content: String = content.chars().take(600).collect();
+    let he_ref = data
+        .get("ref")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&spath)
+        .to_string();
+    let book_title = data
+        .get("book")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| spath.split('.').next().unwrap_or(&spath))
+        .to_string();
+    Some(SefariaHit {
+        content,
+        he_ref,
+        book_title,
+        url: format!("https://www.sefaria.org/{}", spath),
+    })
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  8. סריקה מקומית (סינכרונית) + בניית תוצאות
+// ════════════════════════════════════════════════════════════════════════════
+
+struct ScanOut {
+    results: Vec<ResultOut>,
+    not_found: Vec<usize>,
+    found_count: i64,
+    not_found_count: i64,
+    aborted: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn local_scan(
+    db: &OpenDb,
+    refs: &[RefCtx],
+    fuzzy: bool,
+    abort: &Arc<AtomicBool>,
+    app: &AppHandle,
+    job_id: &str,
+) -> Result<ScanOut, String> {
+    let s = &db.schema;
+    let base = select_prefix(s);
+
+    let exact_sql = format!("{base}l.{hr} = ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    let prefix_sql = format!("{base}l.{hr} LIKE ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    let fts_sql = format!(
+        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
+         b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line_fts f \
+         JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id \
+         WHERE line_fts MATCH ? LIMIT ?",
+        li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title, fp = s.file_path, bid = s.book_id
+    );
+    let like_sql = format!("{base}l.{hr} LIKE ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+
+    // הכנת שאילתות פעם אחת, שימוש חוזר בכל הוריאנטים.
+    let mut stmt_exact = db.conn.prepare(&exact_sql).map_err(|e| e.to_string())?;
+    let mut stmt_prefix = db.conn.prepare(&prefix_sql).map_err(|e| e.to_string())?;
+    let mut stmt_fuzzy = db
+        .conn
+        .prepare(if db.fts { &fts_sql } else { &like_sql })
+        .map_err(|e| e.to_string())?;
+
+    let total = refs.len();
+    let mut results: Vec<ResultOut> = Vec::with_capacity(total);
+    let mut not_found: Vec<usize> = Vec::new();
+    let mut found_count = 0i64;
+    let mut not_found_count = 0i64;
+    let mut aborted = false;
+
+    for (idx, rc) in refs.iter().enumerate() {
+        if abort.load(Ordering::Relaxed) {
+            aborted = true;
+            break;
+        }
+        let variants = generate_variants(&rc.reference);
+        let mut out: Vec<RowOut> = Vec::new();
+        let mut seen: HashSet<i64> = HashSet::new();
+
+        for v in &variants {
+            collect(&mut stmt_exact, v, "exact", &mut seen, &mut out).map_err(|e| e.to_string())?;
+            if out.iter().any(|r| r.match_type == "exact") {
+                break;
+            }
+            collect(&mut stmt_prefix, &format!("{}%", v), "prefix", &mut seen, &mut out)
+                .map_err(|e| e.to_string())?;
+            if fuzzy && v.chars().count() >= 4 {
+                if db.fts {
+                    // FTS עלול להיכשל אם סכמת ה-FTS שונה — נופלים בשקט.
+                    let _ = collect(&mut stmt_fuzzy, &fts_query(v), "fuzzy", &mut seen, &mut out);
+                } else {
+                    collect(&mut stmt_fuzzy, &format!("%{}%", v), "fuzzy", &mut seen, &mut out)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        out.truncate(MAX_RESULTS_PER_REF as usize);
+
+        let best = if out.is_empty() {
+            "none"
+        } else if out.iter().any(|r| r.match_type == "exact") {
+            "exact"
+        } else if out.iter().any(|r| r.match_type == "prefix") {
+            "prefix"
+        } else {
+            "fuzzy"
+        };
+
+        let row = out.first().cloned();
+        let has_rows = !out.is_empty();
+        let result = ResultOut {
+            reference: rc.reference.clone(),
+            match_type: best.to_string(),
+            variants_tried: variants,
+            rows: out,
+            row,
+            source: "local".to_string(),
+            sentence: rc.sentence.clone(),
+            quote_before: rc.quote_before.clone(),
+            is_bavli: detect_bavli(&rc.reference).is_some(),
+        };
+
+        if has_rows {
+            found_count += 1;
+        } else {
+            not_found.push(idx);
+            not_found_count += 1;
+        }
+
+        // שידור התוצאה בזמן אמת
+        let env = ResultEnvelope {
+            job_id,
+            idx,
+            result: &result,
+            progress: Progress {
+                total,
+                processed: idx + 1,
+                found_count,
+                not_found_count,
+                sefaria_update: false,
+            },
+        };
+        let _ = app.emit("compare-result", &env);
+
+        results.push(result);
+    }
+
+    Ok(ScanOut {
+        results,
+        not_found,
+        found_count,
+        not_found_count,
+        aborted,
+    })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  9. State + פקודות Tauri
+// ════════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone)]
+struct DbState(Arc<Mutex<Option<OpenDb>>>);
+#[derive(Clone)]
+struct Jobs(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>);
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Options {
+    #[serde(default)]
+    brackets: Option<String>,
+    #[serde(default = "default_true")]
+    fuzzy: bool,
+    #[serde(default = "default_true")]
+    sefaria: bool,
+}
+fn default_true() -> bool {
+    true
+}
+
+fn emit_done(app: &AppHandle, job_id: &str, summary: Summary) {
+    let _ = app.emit(
+        "compare-done",
+        &DoneEnvelope {
+            job_id: job_id.to_string(),
+            summary,
+        },
+    );
+}
+
+/// פקודת הליבה — מריצה השוואה אסינכרונית ומשדרת אירועים. מחזירה מיד.
+#[tauri::command]
+fn compare_start(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    jobs: State<'_, Jobs>,
+    job_id: String,
+    input_file: String,
+    db_path: Option<String>,
+    options: Options,
+) -> Result<(), String> {
+    let abort = Arc::new(AtomicBool::new(false));
+    jobs.0.lock().unwrap().insert(job_id.clone(), abort.clone());
+
+    let db_arc = db.0.clone();
+    let jobs_arc = jobs.0.clone();
+    let brackets = options.brackets.clone().unwrap_or_else(|| "curly".to_string());
+    let fuzzy = options.fuzzy;
+    let use_sefaria = options.sefaria;
+
+    tauri::async_runtime::spawn(async move {
+        let cleanup = |jobs_arc: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>| {
+            jobs_arc.lock().unwrap().remove(&job_id);
+        };
+
+        let input = input_file.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+        let resolved_db = db_path
+            .as_deref()
+            .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+
+        if !Path::new(&input).exists() {
+            emit_done(&app, &job_id, err_summary(format!("קובץ לא נמצא: {input}")));
+            cleanup(&jobs_arc);
+            return;
+        }
+        if !Path::new(&resolved_db).exists() {
+            emit_done(&app, &job_id, err_summary(format!("מסד הנתונים לא נמצא: {resolved_db}")));
+            cleanup(&jobs_arc);
+            return;
+        }
+
+        // חילוץ טקסט (blocking)
+        let input_for_extract = input.clone();
+        let text = match tokio::task::spawn_blocking(move || extract_text(&input_for_extract)).await {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                emit_done(&app, &job_id, err_summary(format!("שגיאה בקריאת הקובץ: {e}")));
+                cleanup(&jobs_arc);
+                return;
+            }
+            Err(e) => {
+                emit_done(&app, &job_id, err_summary(format!("שגיאה פנימית: {e}")));
+                cleanup(&jobs_arc);
+                return;
+            }
+        };
+
+        // חילוץ הפניות + דה-דופליקציה גלובלית
+        let all_refs = get_references_with_context(&text, &brackets);
+        let mut seen: HashSet<String> = HashSet::new();
+        let unique: Vec<RefCtx> = all_refs
+            .into_iter()
+            .filter(|r| seen.insert(r.reference.clone()))
+            .collect();
+
+        if unique.is_empty() {
+            emit_done(
+                &app,
+                &job_id,
+                Summary {
+                    total_refs: 0,
+                    found_count: 0,
+                    not_found_count: 0,
+                    sefaria_found_count: 0,
+                    aborted: false,
+                    error: None,
+                },
+            );
+            cleanup(&jobs_arc);
+            return;
+        }
+
+        let total = unique.len();
+
+        // ── סריקה מקומית (blocking, חיבור יחיד תחת Mutex) ────────────────────
+        let scan_app = app.clone();
+        let scan_job = job_id.clone();
+        let scan_abort = abort.clone();
+        let scan_db = db_arc.clone();
+        let scan_db_path = resolved_db.clone();
+        let scan = tokio::task::spawn_blocking(move || -> Result<ScanOut, String> {
+            let mut guard = scan_db.lock().unwrap();
+            ensure_db(&mut guard, &scan_db_path)?;
+            let opendb = guard.as_ref().unwrap();
+            local_scan(opendb, &unique, fuzzy, &scan_abort, &scan_app, &scan_job)
+        })
+        .await;
+
+        let mut scan = match scan {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                emit_done(&app, &job_id, err_summary(e));
+                cleanup(&jobs_arc);
+                return;
+            }
+            Err(e) => {
+                emit_done(&app, &job_id, err_summary(format!("שגיאה פנימית: {e}")));
+                cleanup(&jobs_arc);
+                return;
+            }
+        };
+
+        let mut found_count = scan.found_count;
+        let mut not_found_count = scan.not_found_count;
+        let mut sefaria_found = 0i64;
+
+        // ── נפילה ל-Sefaria (אסינכרוני, batch בסוף, concurrency מוגבל) ────────
+        if use_sefaria && !scan.aborted && !abort.load(Ordering::Relaxed) {
+            let to_check: Vec<(usize, String)> = scan
+                .not_found
+                .iter()
+                .map(|&i| (i, scan.results[i].reference.clone()))
+                .collect();
+
+            if !to_check.is_empty() {
+                let client = reqwest::Client::new();
+                let sem = Arc::new(Semaphore::new(SEFARIA_CONCURRENCY));
+                let mut set: JoinSet<(usize, Option<SefariaHit>)> = JoinSet::new();
+
+                for (idx, refstr) in to_check {
+                    if abort.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let client = client.clone();
+                    let sem = sem.clone();
+                    set.spawn(async move {
+                        let _permit = sem.acquire_owned().await.unwrap();
+                        let hit = query_ref_sefaria(&client, &refstr).await;
+                        (idx, hit)
+                    });
+                }
+
+                while let Some(joined) = set.join_next().await {
+                    if let Ok((idx, Some(hit))) = joined {
+                        let row = RowOut {
+                            he_ref: hit.he_ref.clone(),
+                            book_title: hit.book_title.clone(),
+                            file_path: None,
+                            line_index: None,
+                            line_id: None,
+                            content: hit.content.clone(),
+                            match_type: "sefaria".to_string(),
+                            sefaria_url: Some(hit.url.clone()),
+                        };
+                        {
+                            let r = &mut scan.results[idx];
+                            r.source = "sefaria".to_string();
+                            r.match_type = "sefaria".to_string();
+                            r.rows = vec![row.clone()];
+                            r.row = Some(row);
+                        }
+                        found_count += 1;
+                        not_found_count -= 1;
+                        sefaria_found += 1;
+
+                        let env = ResultEnvelope {
+                            job_id: &job_id,
+                            idx,
+                            result: &scan.results[idx],
+                            progress: Progress {
+                                total,
+                                processed: total,
+                                found_count,
+                                not_found_count,
+                                sefaria_update: true,
+                            },
+                        };
+                        let _ = app.emit("compare-result", &env);
+                    }
+                }
+            }
+        }
+
+        emit_done(
+            &app,
+            &job_id,
+            Summary {
+                total_refs: total,
+                found_count,
+                not_found_count,
+                sefaria_found_count: sefaria_found,
+                aborted: scan.aborted || abort.load(Ordering::Relaxed),
+                error: None,
+            },
+        );
+        cleanup(&jobs_arc);
+    });
+
+    Ok(())
+}
+
+fn err_summary(msg: String) -> Summary {
+    Summary {
+        total_refs: 0,
+        found_count: 0,
+        not_found_count: 0,
+        sefaria_found_count: 0,
+        aborted: false,
+        error: Some(msg),
+    }
+}
+
+#[tauri::command]
+fn compare_abort(jobs: State<'_, Jobs>, job_id: String) {
+    if let Some(flag) = jobs.0.lock().unwrap().get(&job_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// הרחבת דף גמרא — ±radius שורות לפי bookId/lineIndex.
+#[tauri::command]
+fn expand_page(
+    db: State<'_, DbState>,
+    line_id: i64,
+    db_path: Option<String>,
+) -> Result<Vec<LineRowOut>, String> {
+    let resolved_db = db_path
+        .as_deref()
+        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+
+    let mut guard = db.0.lock().unwrap();
+    ensure_db(&mut guard, &resolved_db)?;
+    let opendb = guard.as_ref().unwrap();
+    let s = &opendb.schema;
+
+    let (book_id, line_index): (i64, i64) = opendb
+        .conn
+        .query_row(
+            &format!(
+                "SELECT {bid}, {li} FROM line WHERE id=?",
+                bid = s.book_id,
+                li = s.line_index
+            ),
+            params![line_id],
+            |r| Ok((r.get::<_, Option<i64>>(0)?.unwrap_or(0), r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let radius = 40i64;
+    let sql = format!(
+        "SELECT l.id, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content \
+         FROM line l WHERE l.{bid}=? AND l.{li} BETWEEN ? AND ? ORDER BY l.{li}",
+        li = s.line_index,
+        hr = s.he_ref,
+        ct = s.content,
+        bid = s.book_id
+    );
+    let mut stmt = opendb.conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![book_id, (line_index - radius).max(0), line_index + radius],
+            |r| {
+                let id: i64 = r.get::<_, Option<i64>>(0)?.unwrap_or(0);
+                Ok(LineRowOut {
+                    line_id: id,
+                    line_index: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    he_ref: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    content: strip_tags(&r.get::<_, Option<String>>(3)?.unwrap_or_default()),
+                    is_focus: id == line_id,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// דיאלוג בחירת קובץ native (txt/docx/pdf או db).
+#[tauri::command]
+fn pick_file(app: AppHandle, filter: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file();
+    if filter == "db" {
+        builder = builder.add_filter("מסד נתונים", &["db", "sqlite", "sqlite3"]);
+    } else {
+        builder = builder.add_filter("מסמכים", &["txt", "docx", "doc", "pdf"]);
+    }
+    builder
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+        .map(|pb| pb.to_string_lossy().to_string())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  10. כניסת התוכנית — Tray + הסתרת חלון בסגירה
+// ════════════════════════════════════════════════════════════════════════════
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(DbState(Arc::new(Mutex::new(None))))
+        .manage(Jobs(Arc::new(Mutex::new(HashMap::new()))))
+        .invoke_handler(tauri::generate_handler![
+            compare_start,
+            compare_abort,
+            expand_page,
+            pick_file
+        ])
+        .setup(|app| {
+            use tauri::menu::{Menu, MenuItem};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            let open_i = MenuItem::with_id(app, "open", "📖 פתח בודק מקורות", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "✕ סגור", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open_i, &quit_i])?;
+
+            let mut tray = TrayIconBuilder::new()
+                .tooltip("בודק מקורות")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            tray.build(app)?;
+
+            // סגירת חלון → הסתרה לטריי (לא יציאה)
+            if let Some(win) = app.get_webview_window("main") {
+                let win2 = win.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win2.hide();
+                    }
+                });
+            }
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running בודק מקורות");
+}
