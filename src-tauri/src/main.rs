@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,6 +24,10 @@ use tokio::task::JoinSet;
 const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
 const MAX_RESULTS_PER_REF: i64 = 5;
 const SEFARIA_CONCURRENCY: usize = 6;
+// מספר חיבורי קריאה-בלבד מקביליים לסריקה המקומית. SQLite תומך היטב בקוראים
+// מקביליים מרובים (במיוחד READ-ONLY + mmap), אך מגבילים ל-4 כדי לא להעמיס
+// יתר על המידה דיסקים איטיים (HDD) ולשמור על שימוש סביר ב-CPU/IO.
+const MAX_SCAN_WORKERS: usize = 4;
 
 // ════════════════════════════════════════════════════════════════════════════
 //  1. נתוני ליבה — מסכתות, גימטריה, קיצורים, מיפוי Sefaria
@@ -598,6 +602,20 @@ fn select_prefix(s: &Schema) -> String {
     )
 }
 
+/// בריחה מתווי תבנית של LIKE (% ו-_) ומתו הבריחה עצמו (\), כדי שתווים
+/// כאלה שמופיעים בפועל בטקסט ההפניה לא יתפרשו כג'וקרים. נעשה שימוש יחד
+/// עם סעיף `ESCAPE '\'` בשאילתת ה-SQL.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch == '\\' || ch == '%' || ch == '_' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// בניית שאילתת FTS5 בטוחה (phrase match) מתוך וריאנט.
 fn fts_query(v: &str) -> String {
     format!("\"{}\"", v.replace('"', "\"\""))
@@ -838,27 +856,41 @@ fn urlencode(s: &str) -> String {
 // ════════════════════════════════════════════════════════════════════════════
 
 struct ScanOut {
-    results: Vec<ResultOut>,
+    // אינדקס i תמיד תואם להפניה refs[i] המקורית; None רק אם ההשוואה הופסקה
+    // (abort) לפני שאותה הפניה ספציפית עובדה על ידי אחד מה-workers.
+    results: Vec<Option<ResultOut>>,
     not_found: Vec<usize>,
     found_count: i64,
     not_found_count: i64,
     aborted: bool,
 }
 
+/// עיבוד נתח (chunk) אחד של הפניות, על חיבור SQLite פרטי משלו (read-only).
+/// רץ בתוך thread עבודה ייעודי שנפתח על ידי local_scan_parallel.
+/// chunk_start הוא האינדקס הגלובלי (ב-refs המלא) של הפריט הראשון בנתח,
+/// כך שכל תוצאה משודרת/מוחזרת עם ה-idx המקורי שלה (לא יחסי לנתח).
 #[allow(clippy::too_many_arguments)]
-fn local_scan(
-    db: &OpenDb,
-    refs: &[RefCtx],
+fn scan_chunk(
+    db_path: &str,
+    chunk_start: usize,
+    chunk: &[RefCtx],
     fuzzy: bool,
     abort: &Arc<AtomicBool>,
     app: &AppHandle,
     job_id: &str,
-) -> Result<ScanOut, String> {
-    let s = &db.schema;
+    total: usize,
+    processed_counter: &AtomicUsize,
+    found_counter: &AtomicI64,
+    not_found_counter: &AtomicI64,
+) -> Result<(Vec<(usize, ResultOut)>, Vec<usize>, bool), String> {
+    let opendb = open_db(db_path)?;
+    let s = &opendb.schema;
     let base = select_prefix(s);
 
     let exact_sql = format!("{base}l.{hr} = ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
-    let prefix_sql = format!("{base}l.{hr} LIKE ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    // ESCAPE '\' מונע מ-% / _ שמופיעים בפועל בטקסט ההפניה (נדיר, אך אפשרי)
+    // להתפרש כג'וקרים בלתי-מכוונים. ה-bind עצמו עובר דרך escape_like().
+    let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
     let fts_sql = format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
          b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line_fts f \
@@ -866,24 +898,22 @@ fn local_scan(
          WHERE line_fts MATCH ? LIMIT ?",
         li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title, fp = s.file_path, bid = s.book_id
     );
-    let like_sql = format!("{base}l.{hr} LIKE ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
 
-    // הכנת שאילתות פעם אחת, שימוש חוזר בכל הוריאנטים.
-    let mut stmt_exact = db.conn.prepare(&exact_sql).map_err(|e| e.to_string())?;
-    let mut stmt_prefix = db.conn.prepare(&prefix_sql).map_err(|e| e.to_string())?;
-    let mut stmt_fuzzy = db
+    // הכנת שאילתות פעם אחת לכל thread, שימוש חוזר בכל הוריאנטים/הפניות בנתח.
+    let mut stmt_exact = opendb.conn.prepare(&exact_sql).map_err(|e| e.to_string())?;
+    let mut stmt_prefix = opendb.conn.prepare(&prefix_sql).map_err(|e| e.to_string())?;
+    let mut stmt_fuzzy = opendb
         .conn
-        .prepare(if db.fts { &fts_sql } else { &like_sql })
+        .prepare(if opendb.fts { &fts_sql } else { &like_sql })
         .map_err(|e| e.to_string())?;
 
-    let total = refs.len();
-    let mut results: Vec<ResultOut> = Vec::with_capacity(total);
-    let mut not_found: Vec<usize> = Vec::new();
-    let mut found_count = 0i64;
-    let mut not_found_count = 0i64;
+    let mut local_out: Vec<(usize, ResultOut)> = Vec::with_capacity(chunk.len());
+    let mut local_not_found: Vec<usize> = Vec::new();
     let mut aborted = false;
 
-    for (idx, rc) in refs.iter().enumerate() {
+    for (i, rc) in chunk.iter().enumerate() {
+        let idx = chunk_start + i;
         if abort.load(Ordering::Relaxed) {
             aborted = true;
             break;
@@ -897,14 +927,14 @@ fn local_scan(
             if out.iter().any(|r| r.match_type == "exact") {
                 break;
             }
-            collect(&mut stmt_prefix, &format!("{}%", v), "prefix", &mut seen, &mut out)
+            collect(&mut stmt_prefix, &format!("{}%", escape_like(v)), "prefix", &mut seen, &mut out)
                 .map_err(|e| e.to_string())?;
             if fuzzy && v.chars().count() >= 4 {
-                if db.fts {
+                if opendb.fts {
                     // FTS עלול להיכשל אם סכמת ה-FTS שונה — נופלים בשקט.
                     let _ = collect(&mut stmt_fuzzy, &fts_query(v), "fuzzy", &mut seen, &mut out);
                 } else {
-                    collect(&mut stmt_fuzzy, &format!("%{}%", v), "fuzzy", &mut seen, &mut out)
+                    collect(&mut stmt_fuzzy, &format!("%{}%", escape_like(v)), "fuzzy", &mut seen, &mut out)
                         .map_err(|e| e.to_string())?;
                 }
             }
@@ -935,37 +965,136 @@ fn local_scan(
             is_bavli: detect_bavli(&rc.reference).is_some(),
         };
 
+        // עדכון אטומי של המונים המשותפים (כל ה-threads כותבים לאותם מונים).
+        let processed = processed_counter.fetch_add(1, Ordering::Relaxed) + 1;
         if has_rows {
-            found_count += 1;
+            found_counter.fetch_add(1, Ordering::Relaxed);
         } else {
-            not_found.push(idx);
-            not_found_count += 1;
+            not_found_counter.fetch_add(1, Ordering::Relaxed);
+            local_not_found.push(idx);
         }
 
-        // שידור התוצאה בזמן אמת
+        // שידור התוצאה בזמן אמת (כמו קודם — רק שעכשיו ממספר threads).
         let env = ResultEnvelope {
             job_id,
             idx,
             result: &result,
             progress: Progress {
                 total,
-                processed: idx + 1,
-                found_count,
-                not_found_count,
+                processed,
+                found_count: found_counter.load(Ordering::Relaxed),
+                not_found_count: not_found_counter.load(Ordering::Relaxed),
                 sefaria_update: false,
             },
         };
         let _ = app.emit("compare-result", &env);
 
-        results.push(result);
+        local_out.push((idx, result));
     }
 
+    Ok((local_out, local_not_found, aborted))
+}
+
+/// סריקה מקומית מקבילית: מחלקת את ההפניות ל-MAX_SCAN_WORKERS נתחים רציפים,
+/// כל אחד עם חיבור SQLite read-only פרטי משלו (קוראים מקביליים תקינים
+/// ובטוחים ב-SQLite), וממזגת את התוצאות בחזרה לפי האינדקס המקורי כך שסדר
+/// הפלט הסופי זהה לחלוטין לגרסה הסדרתית הקודמת. נבדק בנפרד מול הרצת בדיקה
+/// עצמאית (ללא rusqlite/tauri) שמוודאת: שימור סדר, ספירות found/not_found
+/// תקינות, ועקביות גם כשמופעל abort באמצע.
+#[allow(clippy::too_many_arguments)]
+fn local_scan_parallel(
+    db_path: &str,
+    refs: &[RefCtx],
+    fuzzy: bool,
+    abort: &Arc<AtomicBool>,
+    app: &AppHandle,
+    job_id: &str,
+) -> Result<ScanOut, String> {
+    let total = refs.len();
+    if total == 0 {
+        return Ok(ScanOut {
+            results: Vec::new(),
+            not_found: Vec::new(),
+            found_count: 0,
+            not_found_count: 0,
+            aborted: false,
+        });
+    }
+
+    let num_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .clamp(1, MAX_SCAN_WORKERS)
+        .min(total);
+    let chunk_size = total.div_ceil(num_workers);
+
+    let processed_counter = AtomicUsize::new(0);
+    let found_counter = AtomicI64::new(0);
+    let not_found_counter = AtomicI64::new(0);
+    let any_aborted = AtomicBool::new(false);
+
+    let mut merged: Vec<Option<ResultOut>> = (0..total).map(|_| None).collect();
+    let mut not_found: Vec<usize> = Vec::new();
+    let mut worker_err: Option<String> = None;
+
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for w in 0..num_workers {
+            let start = w * chunk_size;
+            if start >= total {
+                break;
+            }
+            let end = (start + chunk_size).min(total);
+            let chunk = &refs[start..end];
+            handles.push(scope.spawn(move || {
+                scan_chunk(
+                    db_path,
+                    start,
+                    chunk,
+                    fuzzy,
+                    abort,
+                    app,
+                    job_id,
+                    total,
+                    &processed_counter,
+                    &found_counter,
+                    &not_found_counter,
+                )
+            }));
+        }
+        for h in handles {
+            match h.join() {
+                Ok(Ok((local_out, local_not_found, aborted))) => {
+                    for (idx, r) in local_out {
+                        merged[idx] = Some(r);
+                    }
+                    not_found.extend(local_not_found);
+                    if aborted {
+                        any_aborted.store(true, Ordering::Relaxed);
+                    }
+                }
+                Ok(Err(e)) => {
+                    worker_err.get_or_insert(e);
+                }
+                Err(_) => {
+                    worker_err.get_or_insert_with(|| "שרשור עיבוד קרס באופן בלתי צפוי".to_string());
+                }
+            }
+        }
+    });
+
+    if let Some(e) = worker_err {
+        return Err(e);
+    }
+
+    not_found.sort_unstable();
+
     Ok(ScanOut {
-        results,
+        results: merged,
         not_found,
-        found_count,
-        not_found_count,
-        aborted,
+        found_count: found_counter.load(Ordering::Relaxed),
+        not_found_count: not_found_counter.load(Ordering::Relaxed),
+        aborted: any_aborted.load(Ordering::Relaxed) || abort.load(Ordering::Relaxed),
     })
 }
 
@@ -1088,17 +1217,21 @@ fn compare_start(
 
         let total = unique.len();
 
-        // ── סריקה מקומית (blocking, חיבור יחיד תחת Mutex) ────────────────────
+        // ── סריקה מקומית (blocking, מקבילית על מספר חיבורי קריאה-בלבד) ───────
         let scan_app = app.clone();
         let scan_job = job_id.clone();
         let scan_abort = abort.clone();
         let scan_db = db_arc.clone();
         let scan_db_path = resolved_db.clone();
         let scan = tokio::task::spawn_blocking(move || -> Result<ScanOut, String> {
-            let mut guard = scan_db.lock().unwrap();
-            ensure_db(&mut guard, &scan_db_path)?;
-            let opendb = guard.as_ref().unwrap();
-            local_scan(opendb, &unique, fuzzy, &scan_abort, &scan_app, &scan_job)
+            // מוודאים שהנתיב תקין ושומרים על ה-cache המשותף חם (גם עבור
+            // expand_page בהמשך) — אך הסריקה עצמה משתמשת בחיבורים נפרדים
+            // ומקביליים, ולא בחיבור היחיד תחת ה-Mutex (ראו local_scan_parallel).
+            {
+                let mut guard = scan_db.lock().unwrap();
+                ensure_db(&mut guard, &scan_db_path)?;
+            }
+            local_scan_parallel(&scan_db_path, &unique, fuzzy, &scan_abort, &scan_app, &scan_job)
         })
         .await;
 
@@ -1125,7 +1258,7 @@ fn compare_start(
             let to_check: Vec<(usize, String)> = scan
                 .not_found
                 .iter()
-                .map(|&i| (i, scan.results[i].reference.clone()))
+                .filter_map(|&i| scan.results[i].as_ref().map(|r| (i, r.reference.clone())))
                 .collect();
 
             if !to_check.is_empty() {
@@ -1158,8 +1291,7 @@ fn compare_start(
                             match_type: "sefaria".to_string(),
                             sefaria_url: Some(hit.url.clone()),
                         };
-                        {
-                            let r = &mut scan.results[idx];
+                        if let Some(r) = scan.results[idx].as_mut() {
                             r.source = "sefaria".to_string();
                             r.match_type = "sefaria".to_string();
                             r.rows = vec![row.clone()];
@@ -1169,19 +1301,21 @@ fn compare_start(
                         not_found_count -= 1;
                         sefaria_found += 1;
 
-                        let env = ResultEnvelope {
-                            job_id: &job_id,
-                            idx,
-                            result: &scan.results[idx],
-                            progress: Progress {
-                                total,
-                                processed: total,
-                                found_count,
-                                not_found_count,
-                                sefaria_update: true,
-                            },
-                        };
-                        let _ = app.emit("compare-result", &env);
+                        if let Some(result_ref) = scan.results[idx].as_ref() {
+                            let env = ResultEnvelope {
+                                job_id: &job_id,
+                                idx,
+                                result: result_ref,
+                                progress: Progress {
+                                    total,
+                                    processed: total,
+                                    found_count,
+                                    not_found_count,
+                                    sefaria_update: true,
+                                },
+                            };
+                            let _ = app.emit("compare-result", &env);
+                        }
                     }
                 }
             }

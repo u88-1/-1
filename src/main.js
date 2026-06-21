@@ -235,7 +235,7 @@ function buildCompareCard(item,idx){
     const dbBlocks=item.rows.map((row,ri)=>{
         const contentHtml=highlightPhrase(row.content||'',item.quoteBefore);
         const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
-        const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" onclick="expandTalmudPage(${row.lineId},'${esc(row.heRef)}',this)">📖 הרחב לדף מלא</button>`:'';
+        const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 הרחב לדף מלא</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
         return`<div class="db-match${ri>0?' db-match-sep':''}">
             <div class="db-match-meta">
@@ -296,8 +296,8 @@ function renderToolbar(r){
             <div class="export-wrap">
                 <button class="export-btn" id="exportBtn">↓ ייצוא</button>
                 <div class="export-menu" id="exportMenu" style="display:none">
-                    <button onclick="exportData('csv')">CSV</button>
-                    <button onclick="exportData('txt')">טקסט</button>
+                    <button data-action="export" data-format="csv">CSV</button>
+                    <button data-action="export" data-format="txt">טקסט</button>
                 </div>
             </div>
         </div>`;
@@ -341,7 +341,7 @@ function renderResults(){
     const chunk=filtered.slice(0,renderedCount);
     const hasMore=filtered.length>renderedCount;
     const cards=chunk.map((item,idx)=>buildCompareCard(item,idx)).join('');
-    const moreBtn=hasMore?`<div class="load-more-wrap"><button class="expand-btn" onclick="loadMore()">▼ הצג עוד (${filtered.length-chunk.length} נוספות)</button></div>`:'';
+    const moreBtn=hasMore?`<div class="load-more-wrap"><button class="expand-btn" data-action="load-more">▼ הצג עוד (${filtered.length-chunk.length} נוספות)</button></div>`:'';
     resultArea.innerHTML=`<div class="compare-list">${cards}${moreBtn}</div>`;
 }
 function loadMore(){renderedCount+=100;renderResults();}
@@ -360,7 +360,7 @@ async function expandTalmudPage(lineId,heRef,btn){
         </div>`).join('');
         area.innerHTML=`<div class="page-expand">
             <div class="page-expand-header"><span>📖 ${esc(heRef)}</span>
-                <button class="page-expand-close" onclick="this.closest('.page-expand-area').style.display='none';this.closest('.db-match').querySelector('.expand-page-btn').textContent='📖 הרחב לדף מלא';">✕</button>
+                <button class="page-expand-close" data-action="close-page-expand">✕</button>
             </div>
             <div class="page-lines" dir="rtl">${linesHtml}</div>
         </div>`;
@@ -437,7 +437,7 @@ function renderHistory(){
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
                 <div class="history-time">${esc(ds)}</div>
                 <div class="history-time">${esc(h.elapsed||'')}</div>
-                <button class="history-load-btn" onclick="loadFromHistory(${i})">טען שוב</button>
+                <button class="history-load-btn" data-action="load-history" data-index="${i}">טען שוב</button>
             </div>
         </div>`;
     }).join('')}</div>`;
@@ -470,11 +470,30 @@ document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>{
     if(saved){saved.style.display='flex';setTimeout(()=>saved.style.display='none',2500);}
 });
 
-// expose for inline handlers
-window.browseFile=browseFile;
-window.expandTalmudPage=expandTalmudPage;
-window.exportData=exportData;
-window.loadMore=loadMore;
-window.loadFromHistory=loadFromHistory;
+// ── האזנה גלובלית מואצלת (delegation) לכל הפעולות שהיו onclick מוטבע ──
+// מאפשרת CSP מחמיר (script-src ללא 'unsafe-inline') כי אין יותר קוד JS
+// בתוך תכונות HTML; כל הלחיצות על אלמנטים עם data-action מנותבות מכאן,
+// כולל אלמנטים שנוצרים דינמית (כרטיסי השוואה, היסטוריה, תפריט ייצוא וכו').
+document.addEventListener('click',(e)=>{
+    const el=e.target.closest('[data-action]');
+    if(!el)return;
+    const action=el.dataset.action;
+    if(action==='browse'){
+        browseFile(el.dataset.type);
+    }else if(action==='expand-page'){
+        expandTalmudPage(Number(el.dataset.lineId),el.dataset.heRef,el);
+    }else if(action==='close-page-expand'){
+        const area=el.closest('.page-expand-area');
+        if(area)area.style.display='none';
+        const expandBtn=el.closest('.db-match')?.querySelector('.expand-page-btn');
+        if(expandBtn)expandBtn.textContent='📖 הרחב לדף מלא';
+    }else if(action==='export'){
+        exportData(el.dataset.format);
+    }else if(action==='load-more'){
+        loadMore();
+    }else if(action==='load-history'){
+        loadFromHistory(Number(el.dataset.index));
+    }
+});
 
 loadSettingsUI();

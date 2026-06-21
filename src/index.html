@@ -59,14 +59,14 @@
                         <label class="field-label" for="inputFile">קובץ לבדיקה <span class="tag-opt">.txt / .docx / .pdf</span></label>
                         <div class="field-wrap">
                             <input id="inputFile" type="text" class="field-input" placeholder="C:\Users\...\חיי שרה.txt" />
-                            <button class="browse-btn" onclick="browseFile('txt')" title="בחר קובץ">📂</button>
+                            <button class="browse-btn" data-action="browse" data-type="txt" title="בחר קובץ">📂</button>
                         </div>
                     </div>
                     <div class="field">
                         <label class="field-label" for="dbPath">מסד נתונים <span class="tag-opt">אופציונלי</span></label>
                         <div class="field-wrap">
                             <input id="dbPath" type="text" class="field-input" placeholder="C:\ProgramData\otzaria\books\seforim.db" />
-                            <button class="browse-btn" onclick="browseFile('db')" title="בחר מסד נתונים">📂</button>
+                            <button class="browse-btn" data-action="browse" data-type="db" title="בחר מסד נתונים">📂</button>
                         </div>
                     </div>
                 </div>
@@ -141,7 +141,7 @@
                         <label class="field-label" for="settingsDbPath">נתיב ברירת מחדל ל-DB</label>
                         <div class="field-wrap">
                             <input id="settingsDbPath" type="text" class="field-input" placeholder="C:\ProgramData\otzaria\books\seforim.db" />
-                            <button class="browse-btn" onclick="browseFile('db-settings')" title="בחר מסד נתונים">📂</button>
+                            <button class="browse-btn" data-action="browse" data-type="db-settings" title="בחר מסד נתונים">📂</button>
                         </div>
                         <p class="field-hint">כאשר שדה ה-DB בדף הראשי ריק, ייעשה שימוש בנתיב זה.</p>
                     </div>
