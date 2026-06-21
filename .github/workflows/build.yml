@@ -1,12 +1,14 @@
 name: בניית EXE ל-Windows
 
-# רץ אוטומטית בכל העלאה ל-main, וגם ניתן להפעיל ידנית מטאב ה-Actions
-# (כפתור "Run workflow"). הבנייה מתבצעת על שרת Windows אמיתי של GitHub —
-# לא צריך להתקין שום דבר על המחשב האישי.
 on:
   push:
     branches: [main, master]
+  release:
+    types: [published]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -36,3 +38,9 @@ jobs:
         with:
           name: bodek-mekorot-setup
           path: src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Attach installer to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/*.exe
