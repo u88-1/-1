@@ -1121,6 +1121,12 @@ fn local_scan_parallel(
 
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
+        // &AtomicUsize / &AtomicI64 מממשים Copy — כל closure מקבל עותק של
+        // ה-reference (לא move של הערך עצמו), מה שמאפשר לשתף את אותם
+        // מונים בין כל ה-threads מבלי להעביר בעלות שאינה ניתנת להעתקה.
+        let p_ref: &AtomicUsize = &processed_counter;
+        let f_ref: &AtomicI64 = &found_counter;
+        let nf_ref: &AtomicI64 = &not_found_counter;
         for w in 0..num_workers {
             let start = w * chunk_size;
             if start >= total {
@@ -1138,9 +1144,9 @@ fn local_scan_parallel(
                     app,
                     job_id,
                     total,
-                    &processed_counter,
-                    &found_counter,
-                    &not_found_counter,
+                    p_ref,
+                    f_ref,
+                    nf_ref,
                 )
             }));
         }
