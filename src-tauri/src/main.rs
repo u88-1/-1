@@ -24,6 +24,9 @@ use tokio::task::JoinSet;
 const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
 const MAX_RESULTS_PER_REF: i64 = 5;
 const SEFARIA_CONCURRENCY: usize = 6;
+// כמה זמן (בשניות) תוצאת Sefaria נשמרת במטמון מקומי לפני שנחשבת "ישנה"
+// ונשלפת מחדש. טקסט תורני קנוני כמעט ולא משתנה, אז 180 יום זה שמרני וסביר.
+const SEFARIA_CACHE_TTL_SECS: i64 = 60 * 60 * 24 * 180;
 // מספר חיבורי קריאה-בלבד מקביליים לסריקה המקומית. SQLite תומך היטב בקוראים
 // מקביליים מרובים (במיוחד READ-ONLY + mmap), אך מגבילים ל-4 כדי לא להעמיס
 // יתר על המידה דיסקים איטיים (HDD) ולשמור על שימוש סביר ב-CPU/IO.
@@ -284,39 +287,49 @@ fn generate_variants(reference: &str) -> Vec<String> {
     let base = normalize_ref(reference);
     let mut order: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let add = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
+    let mut push = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
         if seen.insert(v.clone()) {
             order.push(v);
         }
     };
-    add(base.clone(), &mut order, &mut seen);
+    push(base.clone(), &mut order, &mut seen);
 
     let wp = normalize_talmud_page(&base);
     if wp != base {
-        add(wp, &mut order, &mut seen);
+        push(wp, &mut order, &mut seen);
     }
-    for v in order.clone() {
+
+    // עיבוד גימטריה — עובדים על indices כדי לא לשכפל את ה-Vec
+    let mut i = 0;
+    while i < order.len() {
+        let v = order[i].clone();
         let wa = replace_hebrew_numbers(&v);
         if wa != v {
-            add(wa, &mut order, &mut seen);
+            push(wa, &mut order, &mut seen);
         }
+        i += 1;
     }
-    for v in order.clone() {
+
+    // פיתוח קיצורי מסכתות + גימטריה + עמוד גמרא — שוב עם indices
+    let mut j = 0;
+    while j < order.len() {
+        let v = order[j].clone();
         for e in expand_tractate_abbreviations(&v) {
-            add(e.clone(), &mut order, &mut seen);
+            push(e.clone(), &mut order, &mut seen);
             let ea = replace_hebrew_numbers(&e);
             if ea != e {
-                add(ea, &mut order, &mut seen);
+                push(ea, &mut order, &mut seen);
             }
             let ep = normalize_talmud_page(&e);
             if ep != e {
-                add(ep.clone(), &mut order, &mut seen);
+                push(ep.clone(), &mut order, &mut seen);
                 let epa = replace_hebrew_numbers(&ep);
                 if epa != ep {
-                    add(epa, &mut order, &mut seen);
+                    push(epa, &mut order, &mut seen);
                 }
             }
         }
+        j += 1;
     }
     order
 }
@@ -543,6 +556,14 @@ fn open_db(path: &str) -> Result<OpenDb, String> {
         "PRAGMA cache_size = -64000;",
         "PRAGMA temp_store = MEMORY;",
         "PRAGMA mmap_size = 268435456;",
+        // מאפשר ל-SQLite להשתמש בריצות פנימיות מקבילות לסריקות גדולות.
+        "PRAGMA threads = 4;",
+        // מפחית lock-contention בקריאה-בלבד (WAL mode): מאפשר לקרוא pages
+        // שעדיין לא עברו checkpoint בלי להמתין ל-lock של כותב.
+        "PRAGMA read_uncommitted = TRUE;",
+        // מריץ ANALYZE קל על טבלאות/אינדקסים שלא נותחו לאחרונה —
+        // משפר את תוכניות השאילתות של query planner.
+        "PRAGMA optimize;",
     ] {
         let _ = conn.execute_batch(pragma);
     }
@@ -851,6 +872,54 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+// ── מטמון מקומי לתוצאות Sefaria ────────────────────────────────────────────
+// נשמר כקובץ JSON בתיקיית הנתונים של האפליקציה (app_data_dir), כך שהרצות
+// חוזרות — גם על מסמכים שונים שמצטטים את אותם מקורות — לא צריכות לפנות
+// לרשת שוב על אותה הפניה. המפתח הוא נתיב ה-Sefaria המנורמל (לא הטקסט הגולמי
+// של ההפניה), כדי שכמה ניסוחים שונים של אותה הפניה ישתפו את אותה רשומה.
+#[derive(Serialize, Deserialize, Clone)]
+struct CachedSefariaHit {
+    content: String,
+    he_ref: String,
+    book_title: String,
+    url: String,
+    fetched_at: i64,
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn sefaria_cache_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("sefaria_cache.json"))
+}
+
+fn load_sefaria_cache(app: &AppHandle) -> HashMap<String, CachedSefariaHit> {
+    let Some(path) = sefaria_cache_path(app) else {
+        return HashMap::new();
+    };
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    // קובץ מטמון פגום/לא תקין לא אמור להפיל את ההשוואה — פשוט מתחילים מריק.
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_sefaria_cache(app: &AppHandle, cache: &HashMap<String, CachedSefariaHit>) {
+    let Some(path) = sefaria_cache_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(cache) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  8. סריקה מקומית (סינכרונית) + בניית תוצאות
 // ════════════════════════════════════════════════════════════════════════════
@@ -921,17 +990,30 @@ fn scan_chunk(
         let variants = generate_variants(&rc.reference);
         let mut out: Vec<RowOut> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
+        let mut has_exact = false;
+        let mut has_prefix = false;
 
-        for v in &variants {
+        'variants: for v in &variants {
             collect(&mut stmt_exact, v, "exact", &mut seen, &mut out).map_err(|e| e.to_string())?;
-            if out.iter().any(|r| r.match_type == "exact") {
-                break;
+            // בדוק האם תוצאה מדויקת נוספה בסיבוב הזה
+            if !has_exact && out.iter().any(|r| r.match_type == "exact") {
+                has_exact = true;
+                break 'variants;
             }
+            // prefix
             collect(&mut stmt_prefix, &format!("{}%", escape_like(v)), "prefix", &mut seen, &mut out)
                 .map_err(|e| e.to_string())?;
-            if fuzzy && v.chars().count() >= 4 {
+            if !has_prefix && out.iter().any(|r| r.match_type == "prefix") {
+                has_prefix = true;
+            }
+            // אם כבר יש מספיק תוצאות prefix — אין סיבה לנסות וריאנטים נוספים
+            // (fuzzy רק יוסיף רעש; נחסוך את שאר קריאות ה-DB)
+            if has_prefix && out.len() >= MAX_RESULTS_PER_REF as usize {
+                break 'variants;
+            }
+            // fuzzy — רק אם אין prefix בכלל ואורך הוריאנט מינימלי (4 תווים)
+            if !has_prefix && fuzzy && v.chars().count() >= 4 {
                 if opendb.fts {
-                    // FTS עלול להיכשל אם סכמת ה-FTS שונה — נופלים בשקט.
                     let _ = collect(&mut stmt_fuzzy, &fts_query(v), "fuzzy", &mut seen, &mut out);
                 } else {
                     collect(&mut stmt_fuzzy, &format!("%{}%", escape_like(v)), "fuzzy", &mut seen, &mut out)
@@ -941,14 +1023,14 @@ fn scan_chunk(
         }
         out.truncate(MAX_RESULTS_PER_REF as usize);
 
-        let best = if out.is_empty() {
-            "none"
-        } else if out.iter().any(|r| r.match_type == "exact") {
+        let best = if has_exact {
             "exact"
-        } else if out.iter().any(|r| r.match_type == "prefix") {
+        } else if has_prefix {
             "prefix"
-        } else {
+        } else if !out.is_empty() {
             "fuzzy"
+        } else {
+            "none"
         };
 
         let row = out.first().cloned();
@@ -1262,62 +1344,136 @@ fn compare_start(
                 .collect();
 
             if !to_check.is_empty() {
-                let client = reqwest::Client::new();
-                let sem = Arc::new(Semaphore::new(SEFARIA_CONCURRENCY));
-                let mut set: JoinSet<(usize, Option<SefariaHit>)> = JoinSet::new();
+                let mut sefaria_cache = load_sefaria_cache(&app);
+                let now = now_unix();
+
+                // הפרדה בין הפניות שכבר יש להן תוצאה תקפה במטמון (תשובה
+                // מיידית, בלי רשת בכלל) לבין כאלה שצריך לשלוף בפועל מ-Sefaria.
+                let mut from_cache: Vec<(usize, CachedSefariaHit)> = Vec::new();
+                let mut to_fetch: Vec<(usize, String, String)> = Vec::new(); // (idx, reference, spath)
 
                 for (idx, refstr) in to_check {
-                    if abort.load(Ordering::Relaxed) {
-                        break;
+                    match ref_to_sefaria_path(&refstr) {
+                        Some(spath) => match sefaria_cache.get(&spath) {
+                            Some(hit) if now - hit.fetched_at < SEFARIA_CACHE_TTL_SECS => {
+                                from_cache.push((idx, hit.clone()));
+                            }
+                            _ => to_fetch.push((idx, refstr, spath)),
+                        },
+                        None => {} // לא ניתן למיפוי ל-Sefaria כלל — לא רלוונטי לרשת/מטמון
                     }
-                    let client = client.clone();
-                    let sem = sem.clone();
-                    set.spawn(async move {
-                        let _permit = sem.acquire_owned().await.unwrap();
-                        let hit = query_ref_sefaria(&client, &refstr).await;
-                        (idx, hit)
-                    });
                 }
 
-                while let Some(joined) = set.join_next().await {
-                    if let Ok((idx, Some(hit))) = joined {
-                        let row = RowOut {
-                            he_ref: hit.he_ref.clone(),
-                            book_title: hit.book_title.clone(),
-                            file_path: None,
-                            line_index: None,
-                            line_id: None,
-                            content: hit.content.clone(),
-                            match_type: "sefaria".to_string(),
-                            sefaria_url: Some(hit.url.clone()),
+                // יישום מיידי של פגיעות מטמון, בלי להמתין לשום קריאת רשת.
+                for (idx, hit) in from_cache {
+                    let row = RowOut {
+                        he_ref: hit.he_ref.clone(),
+                        book_title: hit.book_title.clone(),
+                        file_path: None,
+                        line_index: None,
+                        line_id: None,
+                        content: hit.content.clone(),
+                        match_type: "sefaria".to_string(),
+                        sefaria_url: Some(hit.url.clone()),
+                    };
+                    if let Some(r) = scan.results[idx].as_mut() {
+                        r.source = "sefaria".to_string();
+                        r.match_type = "sefaria".to_string();
+                        r.rows = vec![row.clone()];
+                        r.row = Some(row);
+                    }
+                    found_count += 1;
+                    not_found_count -= 1;
+                    sefaria_found += 1;
+
+                    if let Some(result_ref) = scan.results[idx].as_ref() {
+                        let env = ResultEnvelope {
+                            job_id: &job_id,
+                            idx,
+                            result: result_ref,
+                            progress: Progress {
+                                total,
+                                processed: total,
+                                found_count,
+                                not_found_count,
+                                sefaria_update: true,
+                            },
                         };
-                        if let Some(r) = scan.results[idx].as_mut() {
-                            r.source = "sefaria".to_string();
-                            r.match_type = "sefaria".to_string();
-                            r.rows = vec![row.clone()];
-                            r.row = Some(row);
-                        }
-                        found_count += 1;
-                        not_found_count -= 1;
-                        sefaria_found += 1;
+                        let _ = app.emit("compare-result", &env);
+                    }
+                }
 
-                        if let Some(result_ref) = scan.results[idx].as_ref() {
-                            let env = ResultEnvelope {
-                                job_id: &job_id,
-                                idx,
-                                result: result_ref,
-                                progress: Progress {
-                                    total,
-                                    processed: total,
-                                    found_count,
-                                    not_found_count,
-                                    sefaria_update: true,
+                if !to_fetch.is_empty() && !abort.load(Ordering::Relaxed) {
+                    let client = reqwest::Client::new();
+                    let sem = Arc::new(Semaphore::new(SEFARIA_CONCURRENCY));
+                    let mut set: JoinSet<(usize, String, Option<SefariaHit>)> = JoinSet::new();
+
+                    for (idx, refstr, spath) in to_fetch {
+                        if abort.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let client = client.clone();
+                        let sem = sem.clone();
+                        set.spawn(async move {
+                            let _permit = sem.acquire_owned().await.unwrap();
+                            let hit = query_ref_sefaria(&client, &refstr).await;
+                            (idx, spath, hit)
+                        });
+                    }
+
+                    while let Some(joined) = set.join_next().await {
+                        if let Ok((idx, spath, Some(hit))) = joined {
+                            sefaria_cache.insert(
+                                spath,
+                                CachedSefariaHit {
+                                    content: hit.content.clone(),
+                                    he_ref: hit.he_ref.clone(),
+                                    book_title: hit.book_title.clone(),
+                                    url: hit.url.clone(),
+                                    fetched_at: now,
                                 },
+                            );
+
+                            let row = RowOut {
+                                he_ref: hit.he_ref.clone(),
+                                book_title: hit.book_title.clone(),
+                                file_path: None,
+                                line_index: None,
+                                line_id: None,
+                                content: hit.content.clone(),
+                                match_type: "sefaria".to_string(),
+                                sefaria_url: Some(hit.url.clone()),
                             };
-                            let _ = app.emit("compare-result", &env);
+                            if let Some(r) = scan.results[idx].as_mut() {
+                                r.source = "sefaria".to_string();
+                                r.match_type = "sefaria".to_string();
+                                r.rows = vec![row.clone()];
+                                r.row = Some(row);
+                            }
+                            found_count += 1;
+                            not_found_count -= 1;
+                            sefaria_found += 1;
+
+                            if let Some(result_ref) = scan.results[idx].as_ref() {
+                                let env = ResultEnvelope {
+                                    job_id: &job_id,
+                                    idx,
+                                    result: result_ref,
+                                    progress: Progress {
+                                        total,
+                                        processed: total,
+                                        found_count,
+                                        not_found_count,
+                                        sefaria_update: true,
+                                    },
+                                };
+                                let _ = app.emit("compare-result", &env);
+                            }
                         }
                     }
                 }
+
+                save_sefaria_cache(&app, &sefaria_cache);
             }
         }
 
