@@ -1727,7 +1727,68 @@ fn pick_file(app: AppHandle, filter: String) -> Option<String> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  10. כניסת התוכנית — Tray + הסתרת חלון בסגירה
+//  10. פתיחת תוצאה ישירות באוצריא
+// ════════════════════════════════════════════════════════════════════════════
+
+/// פותח את אוצריא ישירות על ספר ושורה מסוימת.
+///
+/// הלוגיקה:
+///   1. מוצא את קובץ tabs.json של אוצריא (ב-AppData\Roaming\com.otzaria.otzaria)
+///   2. כותב tab חדש עם הספר והאינדקס המבוקש
+///   3. מפעיל את אוצריא (אם לא פועלת כבר) — Windows מביא את החלון קדמה אוטומטית
+///      כי אוצריא בנויה כ-single-instance
+///
+/// book_title — שם הספר בדיוק כפי שמופיע בטור `title` של טבלת `book` ב-DB
+/// line_index — מספר השורה שאוצריא תגלול אליה
+#[tauri::command]
+fn open_in_otzaria(book_title: String, line_index: i64) -> Result<(), String> {
+    // ── מציאת נתיב tabs.json של אוצריא ────────────────────────────────────
+    let appdata = std::env::var("APPDATA")
+        .map_err(|_| "לא נמצא APPDATA".to_string())?;
+    let tabs_path = std::path::PathBuf::from(&appdata)
+        .join("com.otzaria.otzaria")
+        .join("tabs.json");
+
+    // ── בניית מבנה ה-tab שאוצריא מצפה לו (לפי text_tab.dart) ──────────────
+    let tab = serde_json::json!([{
+        "type": "TextBookTab",
+        "title": book_title,
+        "initalIndex": line_index,
+        "commentators": [],
+        "splitedView": true
+    }]);
+
+    // ── כתיבת tabs.json ────────────────────────────────────────────────────
+    if let Some(parent) = tabs_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&tabs_path, tab.to_string()).map_err(|e| e.to_string())?;
+
+    // ── פתיחת אוצריא (מוצאים את ה-exe בנתיב ברירת המחדל) ─────────────────
+    // אם אוצריא כבר פועלת, Windows יביא את החלון לפרונט אוטומטית (single-instance).
+    let otzaria_paths = [
+        format!("{}\\..\\otzaria\\otzaria.exe", appdata),
+        "C:\\Program Files\\otzaria\\otzaria.exe".to_string(),
+        "C:\\Program Files (x86)\\otzaria\\otzaria.exe".to_string(),
+        format!("{}\\..\\Local\\Programs\\otzaria\\otzaria.exe", appdata),
+    ];
+
+    for path in &otzaria_paths {
+        let p = std::path::Path::new(path);
+        if p.exists() {
+            std::process::Command::new(p)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+
+    // אם לא נמצא — tabs.json כבר נכתב, אוצריא תפתח ישירות על הספר כשהמשתמש יפעיל אותה
+    Err("אוצריא לא נמצאה — הספר יפתח בהפעלה הבאה של אוצריא".to_string())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  11. כניסת התוכנית — Tray + הסתרת חלון בסגירה
 // ════════════════════════════════════════════════════════════════════════════
 
 fn main() {
@@ -1739,7 +1800,8 @@ fn main() {
             compare_start,
             compare_abort,
             expand_page,
-            pick_file
+            pick_file,
+            open_in_otzaria
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
