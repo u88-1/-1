@@ -1090,6 +1090,23 @@ mark.hl {
 .expand-page-btn:hover { background: rgba(201,168,76,0.25); }
 .expand-page-btn:disabled { opacity: 0.6; cursor: default; }
 
+.otzaria-open-btn {
+    display: inline-block;
+    margin-top: 8px;
+    margin-right: 8px;
+    background: rgba(60,120,80,0.13);
+    border: 1px solid rgba(60,150,90,0.35);
+    color: #4caf78;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background var(--ease);
+}
+.otzaria-open-btn:hover { background: rgba(60,150,90,0.25); }
+.otzaria-open-btn:disabled { opacity: 0.6; cursor: default; }
+
 /* ── Full page expand panel ── */
 .page-expand {
     margin-top: 12px;
@@ -1354,3 +1371,4 @@ mark.hl {
 .run-btn.stop-mode:hover {
     background: rgba(248,113,113,0.25);
 }
+
