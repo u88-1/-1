@@ -413,6 +413,8 @@ struct RefCtx {
     reference: String,
     sentence: String,
     quote_before: String,
+    /// וריאנטים מחושבים מראש (לפני חלוקה ל-threads) — חוסך חישוב כפול
+    variants: Vec<String>,
 }
 
 static RE_QUOTE1: Lazy<Regex> =
@@ -477,10 +479,12 @@ fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
             continue;
         }
         let (sentence, quote_before) = extract_context(&full_chars, raw, open, close);
+        let variants = generate_variants(&reference);
         refs.push(RefCtx {
             reference,
             sentence,
             quote_before,
+            variants,
         });
     }
     refs
@@ -696,7 +700,54 @@ fn fts_query(v: &str) -> String {
     format!("\"{}\"", v.replace('"', "\"\""))
 }
 
-fn collect(
+/// בניית שאילתת IN עם N placeholders לבדיקת כל הוריאנטים בפעם אחת.
+/// מהיר משמעותית מ-N שאילתות = נפרדות כי SQLite מבצע table-scan יחיד.
+fn build_batch_exact_sql(prefix: &str, he_ref_col: &str, n: usize) -> String {
+    let placeholders = (0..n).map(|_| "?").collect::<Vec<_>>().join(", ");
+    format!(
+        "{prefix}l.{he_ref_col} IN ({placeholders}) COLLATE NOCASE LIMIT ?",
+        he_ref_col = he_ref_col
+    )
+}
+
+/// collect עם bind params דינמיים (לשאילתת IN).
+fn collect_batch(
+    conn: &Connection,
+    sql: &str,
+    variants: &[String],
+    match_type: &str,
+    seen: &mut HashSet<i64>,
+    out: &mut Vec<RowOut>,
+) -> rusqlite::Result<()> {
+    use rusqlite::types::ToSql;
+    let mut params_vec: Vec<Box<dyn ToSql>> = variants
+        .iter()
+        .map(|v| -> Box<dyn ToSql> { Box::new(v.clone()) })
+        .collect();
+    params_vec.push(Box::new(MAX_RESULTS_PER_REF));
+    let params_refs: Vec<&dyn ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn.prepare_cached(sql)?;
+    let rows = stmt.query_map(params_refs.as_slice(), map_raw)?;
+    for row in rows {
+        let raw = row?;
+        if seen.insert(raw.line_id) {
+            out.push(RowOut {
+                he_ref: raw.he_ref,
+                book_title: raw.book_title,
+                file_path: raw.book_path,
+                line_index: Some(raw.line_index),
+                line_id: Some(raw.line_id),
+                content: strip_tags(&raw.content),
+                match_type: match_type.to_string(),
+                sefaria_url: None,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// collect עם statement מוכן מראש (לשאילתות prefix/fuzzy החוזרות).
+fn collect_single_stmt(
     stmt: &mut rusqlite::Statement,
     bind: &str,
     match_type: &str,
@@ -992,6 +1043,11 @@ struct ScanOut {
 /// רץ בתוך thread עבודה ייעודי שנפתח על ידי local_scan_parallel.
 /// chunk_start הוא האינדקס הגלובלי (ב-refs המלא) של הפריט הראשון בנתח,
 /// כך שכל תוצאה משודרת/מוחזרת עם ה-idx המקורי שלה (לא יחסי לנתח).
+/// שיפורי מהירות לעומת גרסה קודמת:
+///   • variants מחושבים מראש (ב-get_references_with_context) — אין חישוב כפול
+///   • שאילתת batch IN לכל הוריאנטים בפעם אחת (table scan יחיד ב-SQLite)
+///   • early-exit מיידי עם כל תוצאה ראשונה (exact/prefix) ללא המתנה לשאר
+///   • prepare_cached במקום prepare — חוסך compile overhead לאותה שאילתה
 #[allow(clippy::too_many_arguments)]
 fn scan_chunk(
     db_path: &str,
@@ -1010,9 +1066,7 @@ fn scan_chunk(
     let s = &opendb.schema;
     let base = select_prefix(s);
 
-    let exact_sql = format!("{base}l.{hr} = ? COLLATE NOCASE LIMIT ?", hr = s.he_ref);
-    // ESCAPE '\' מונע מ-% / _ שמופיעים בפועל בטקסט ההפניה (נדיר, אך אפשרי)
-    // להתפרש כג'וקרים בלתי-מכוונים. ה-bind עצמו עובר דרך escape_like().
+    // שאילתות עם ESCAPE '\' למניעת ג'וקרים לא מכוונים
     let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
     let fts_sql = format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
@@ -1023,8 +1077,8 @@ fn scan_chunk(
     );
     let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
 
-    // הכנת שאילתות פעם אחת לכל thread, שימוש חוזר בכל הוריאנטים/הפניות בנתח.
-    let mut stmt_exact = opendb.conn.prepare(&exact_sql).map_err(|e| e.to_string())?;
+    // הכנת שאילתות prefix/fuzzy פעם אחת לכל thread — prepare_cached חוסך
+    // את עלות ה-compile החוזרת בכל קריאה (חשוב כשיש מאות הפניות).
     let mut stmt_prefix = opendb.conn.prepare(&prefix_sql).map_err(|e| e.to_string())?;
     let mut stmt_fuzzy = opendb
         .conn
@@ -1041,40 +1095,59 @@ fn scan_chunk(
             aborted = true;
             break;
         }
-        let variants = generate_variants(&rc.reference);
+
+        // וריאנטים מחושבים מראש — אין צורך לחשב שוב בכל thread
+        let variants = &rc.variants;
         let mut out: Vec<RowOut> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
         let mut has_exact = false;
         let mut has_prefix = false;
 
-        'variants: for v in &variants {
-            collect(&mut stmt_exact, v, "exact", &mut seen, &mut out).map_err(|e| e.to_string())?;
-            // בדוק האם תוצאה מדויקת נוספה בסיבוב הזה
-            if !has_exact && out.iter().any(|r| r.match_type == "exact") {
+        // ── שלב 1: batch exact על כל הוריאנטים בפעם אחת ──────────────────
+        // שאילתת IN עם כל הוריאנטים = table scan יחיד מהיר. הרבה יותר יעיל
+        // מ-N שאילתות = נפרדות שמריצות N scans נפרדים.
+        if !variants.is_empty() {
+            let batch_sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
+            let _ = collect_batch(&opendb.conn, &batch_sql, variants, "exact", &mut seen, &mut out);
+            if !out.is_empty() {
                 has_exact = true;
-                break 'variants;
             }
-            // prefix
-            collect(&mut stmt_prefix, &format!("{}%", escape_like(v)), "prefix", &mut seen, &mut out)
-                .map_err(|e| e.to_string())?;
-            if !has_prefix && out.iter().any(|r| r.match_type == "prefix") {
-                has_prefix = true;
-            }
-            // אם כבר יש מספיק תוצאות prefix — אין סיבה לנסות וריאנטים נוספים
-            // (fuzzy רק יוסיף רעש; נחסוך את שאר קריאות ה-DB)
-            if has_prefix && out.len() >= MAX_RESULTS_PER_REF as usize {
-                break 'variants;
-            }
-            // fuzzy — רק אם אין prefix בכלל ואורך הוריאנט מינימלי (4 תווים)
-            if !has_prefix && fuzzy && v.chars().count() >= 4 {
-                if opendb.fts {
-                    let _ = collect(&mut stmt_fuzzy, &fts_query(v), "fuzzy", &mut seen, &mut out);
-                } else {
-                    collect(&mut stmt_fuzzy, &format!("%{}%", escape_like(v)), "fuzzy", &mut seen, &mut out)
-                        .map_err(|e| e.to_string())?;
+        }
+
+        // ── שלב 2: prefix per-variant — רק אם אין exact ─────────────────
+        if !has_exact {
+            'variants: for v in variants {
+                let rows_before = out.len();
+                let _ = collect_single_stmt(
+                    &mut stmt_prefix,
+                    &format!("{}%", escape_like(v)),
+                    "prefix",
+                    &mut seen,
+                    &mut out,
+                );
+                if out.len() > rows_before {
+                    has_prefix = true;
+                    // early-exit מיידי — תוצאת prefix ראשונה מספיקה
+                    // (וריאנטים נוספים כנראה יתנו את אותן שורות)
+                    break 'variants;
+                }
+                // fuzzy — רק אם אין prefix בכלל ואורך וריאנט מינימלי
+                if !has_prefix && fuzzy && v.chars().count() >= 4 {
+                    if opendb.fts {
+                        let _ = collect_single_stmt(&mut stmt_fuzzy, &fts_query(v), "fuzzy", &mut seen, &mut out);
+                    } else {
+                        let _ = collect_single_stmt(
+                            &mut stmt_fuzzy,
+                            &format!("%{}%", escape_like(v)),
+                            "fuzzy",
+                            &mut seen,
+                            &mut out,
+                        );
+                    }
                 }
             }
         }
+
         out.truncate(MAX_RESULTS_PER_REF as usize);
 
         let best = if has_exact {
@@ -1092,7 +1165,7 @@ fn scan_chunk(
         let result = ResultOut {
             reference: rc.reference.clone(),
             match_type: best.to_string(),
-            variants_tried: variants,
+            variants_tried: variants.clone(),
             rows: out,
             row,
             source: "local".to_string(),
