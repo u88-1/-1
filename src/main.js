@@ -236,6 +236,7 @@ function buildCompareCard(item,idx){
         const contentHtml=highlightPhrase(row.content||'',item.quoteBefore);
         const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
         const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 הרחב לדף מלא</button>`:'';
+        const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" title="פתח את המקום הזה ישירות באוצריא">📚 פתח באוצריא</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
         return`<div class="db-match${ri>0?' db-match-sep':''}">
             <div class="db-match-meta">
@@ -246,6 +247,7 @@ function buildCompareCard(item,idx){
             </div>
             <div class="db-content" dir="rtl">${contentHtml}</div>
             ${expandBtn}
+            ${otzariaBtn}
             <div class="page-expand-area" id="page-${idx}-${ri}" style="display:none"></div>
         </div>`;
     }).join('');
@@ -482,6 +484,22 @@ document.addEventListener('click',(e)=>{
         browseFile(el.dataset.type);
     }else if(action==='expand-page'){
         expandTalmudPage(Number(el.dataset.lineId),el.dataset.heRef,el);
+    }else if(action==='open-in-otzaria'){
+        const btn=el;
+        const orig=btn.textContent;
+        btn.textContent='⏳ פותח...';
+        btn.disabled=true;
+        invoke('open_in_otzaria',{
+            bookTitle:btn.dataset.bookTitle,
+            lineIndex:Number(btn.dataset.lineIndex)
+        }).then(()=>{
+            btn.textContent='✅ נפתח!';
+            setTimeout(()=>{btn.textContent=orig;btn.disabled=false;},2000);
+        }).catch(err=>{
+            btn.textContent=orig;
+            btn.disabled=false;
+            alert('שגיאה בפתיחת אוצריא:\n'+err);
+        });
     }else if(action==='close-page-expand'){
         const area=el.closest('.page-expand-area');
         if(area)area.style.display='none';
@@ -497,3 +515,4 @@ document.addEventListener('click',(e)=>{
 });
 
 loadSettingsUI();
+
