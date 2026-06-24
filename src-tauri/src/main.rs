@@ -111,6 +111,19 @@ fn tractate_pairs() -> Vec<(&'static str, &'static str)> {
         ("ערכין", "ערכין"), ("תמורה", "תמורה"),
         ("כריתות", "כריתות"), ("כרית'", "כריתות"),
         ("מעילה", "מעילה"), ("תמיד", "תמיד"), ("נדה", "נדה"),
+        // ── מדרש רבה ──────────────────────────────────────────────────────────
+        // חשוב: שמות ארוכים (שיר השירים רבה) חייבים לבוא לפני הקצרים כדי
+        // שה-sort-by-length יתפוס אותם ראשון.
+        ("שיר השירים רבה", "שיר השירים רבה"), ("שה\"ש רבה", "שיר השירים רבה"), ("שיר רבה", "שיר השירים רבה"),
+        ("בראשית רבה", "בראשית רבה"), ("בר\"ר", "בראשית רבה"), ("ב\"ר", "בראשית רבה"),
+        ("שמות רבה", "שמות רבה"), ("שמ\"ר", "שמות רבה"),
+        ("ויקרא רבה", "ויקרא רבה"), ("ויק\"ר", "ויקרא רבה"),
+        ("במדבר רבה", "במדבר רבה"), ("במ\"ר", "במדבר רבה"), ("במד\"ר", "במדבר רבה"),
+        ("דברים רבה", "דברים רבה"), ("דב\"ר", "דברים רבה"),
+        ("רות רבה", "רות רבה"),
+        ("איכה רבה", "איכה רבה"), ("אי\"ר", "איכה רבה"),
+        ("קהלת רבה", "קהלת רבה"), ("קה\"ר", "קהלת רבה"),
+        ("אסתר רבה", "אסתר רבה"), ("אס\"ר", "אסתר רבה"),
     ]
 }
 
@@ -131,6 +144,7 @@ static ABBREV_RES: Lazy<Vec<(FRegex, String)>> = Lazy::new(|| {
 
 static SEFARIA_EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     HashMap::from([
+        // ── ש"ס בבלי ────────────────────────────────────────────────────────
         ("ברכות", "Berakhot"), ("שבת", "Shabbat"), ("עירובין", "Eruvin"),
         ("פסחים", "Pesachim"), ("שקלים", "Shekalim"), ("יומא", "Yoma"),
         ("סוכה", "Sukkah"), ("ביצה", "Beitzah"), ("ראש השנה", "Rosh Hashanah"),
@@ -144,12 +158,25 @@ static SEFARIA_EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
         ("מנחות", "Menachot"), ("חולין", "Chullin"), ("בכורות", "Bekhorot"),
         ("ערכין", "Arakhin"), ("תמורה", "Temurah"), ("כריתות", "Keritot"),
         ("מעילה", "Meilah"), ("תמיד", "Tamid"), ("נדה", "Niddah"),
+        // ── תנ"ך ────────────────────────────────────────────────────────────
         ("בראשית", "Genesis"), ("שמות", "Exodus"), ("ויקרא", "Leviticus"),
         ("במדבר", "Numbers"), ("דברים", "Deuteronomy"), ("יהושע", "Joshua"),
         ("שופטים", "Judges"), ("תהלים", "Psalms"), ("משלי", "Proverbs"),
         ("איוב", "Job"), ("שיר השירים", "Song of Songs"), ("רות", "Ruth"),
         ("איכה", "Lamentations"), ("קהלת", "Ecclesiastes"), ("אסתר", "Esther"),
         ("דניאל", "Daniel"), ("עזרא", "Ezra"), ("נחמיה", "Nehemiah"),
+        // ── מדרש רבה ────────────────────────────────────────────────────────
+        // נתיב ה-API של Sefaria: ספר_Rabbah.פרשה.סימן (קו_תחתי לא רווח)
+        ("בראשית רבה", "Genesis_Rabbah"),
+        ("שמות רבה", "Exodus_Rabbah"),
+        ("ויקרא רבה", "Leviticus_Rabbah"),
+        ("במדבר רבה", "Numbers_Rabbah"),
+        ("דברים רבה", "Deuteronomy_Rabbah"),
+        ("שיר השירים רבה", "Song_of_Songs_Rabbah"),
+        ("רות רבה", "Ruth_Rabbah"),
+        ("איכה רבה", "Lamentations_Rabbah"),
+        ("קהלת רבה", "Ecclesiastes_Rabbah"),
+        ("אסתר רבה", "Esther_Rabbah"),
     ])
 });
 
@@ -228,6 +255,17 @@ static RE_PAGE_DIGIT: Lazy<FRegex> = Lazy::new(|| FRegex::new(r"(\d+)([אב])\b"
 static RE_PAGE_HEBDOT: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r"([א-ת]{1,4})([.:])(?!\d)").unwrap());
 
+// מדרש רבה: נרמול פורמט "פרשה X סימן Y" → "X, Y" (לפני חיפוש מקומי/Sefaria)
+// תואם גם: "פרשה ח'", "פרשה א'", "סי' ב'", "סי׳ ה" וכו'
+static RE_PARASHA_SIMAN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"פרש(?:ה|ת)\s+([א-ת]{1,4}['׳]?|\d+)(?:\s+סימ[ן]\s+([א-ת]{1,4}['׳]?|\d+))?")
+        .unwrap()
+});
+// נרמול "פרשה X" בלי סימן (לכיסוי מקרה שה-DB מאחסן רק ברמת הפרשה)
+static RE_PARASHA_ONLY: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"פרש(?:ה|ת)\s+([א-ת]{1,4}['׳]?|\d+)").unwrap()
+});
+
 /// החלפת רצפי אותיות עבריות (לא חלק ממילה ארוכה) במספר גימטרי.
 fn replace_hebrew_numbers(text: &str) -> String {
     fre_replace_all(&RE_HEBNUM, text, |c| {
@@ -293,6 +331,22 @@ fn generate_variants(reference: &str) -> Vec<String> {
         }
     };
     push(base.clone(), &mut order, &mut seen);
+
+    // נרמול "פרשה X סימן Y" (מדרש רבה וספרות דומה) → "X, Y" + "X" כוריאנטים
+    // נעשה לפני שאר הנרמולים כך שהוריאנטים המנורמלים עוברים גם עיבוד גימטריה.
+    if let Some(caps) = RE_PARASHA_SIMAN.captures(&base) {
+        let parasha = caps.get(1).map(|m| m.as_str().trim_matches(|c| c == '\'' || c == '׳')).unwrap_or("");
+        let before = &base[..caps.get(0).unwrap().start()].trim_end();
+        if let Some(siman) = caps.get(2).map(|m| m.as_str().trim_matches(|c| c == '\'' || c == '׳')) {
+            push(format!("{} {}, {}", before, parasha, siman), &mut order, &mut seen);
+            push(format!("{} {}:{}", before, parasha, siman), &mut order, &mut seen);
+        }
+        push(format!("{} {}", before, parasha), &mut order, &mut seen);
+    } else if let Some(caps) = RE_PARASHA_ONLY.captures(&base) {
+        let parasha = caps.get(1).map(|m| m.as_str().trim_matches(|c| c == '\'' || c == '׳')).unwrap_or("");
+        let before = &base[..caps.get(0).unwrap().start()].trim_end();
+        push(format!("{} {}", before, parasha), &mut order, &mut seen);
+    }
 
     let wp = normalize_talmud_page(&base);
     if wp != base {
