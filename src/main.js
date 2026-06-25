@@ -1,3 +1,58 @@
+// ── Tantivy index check + build ──────────────────────────────────────────
+async function checkAndShowIndexStatus() {
+    const dbPath = document.getElementById('dbPath').value.trim();
+    const statusEl = document.getElementById('indexStatus');
+    const btn = document.getElementById('buildIndexBtn');
+    if (!statusEl || !btn) return;
+    try {
+        const exists = await invoke('check_ref_index', { dbPath: dbPath || '' });
+        if (exists) {
+            statusEl.style.display = 'block';
+            statusEl.className = 'index-status index-ok';
+            statusEl.textContent = '✅ אינדקס מהיר פעיל';
+            btn.textContent = '🔄 בנה מחדש';
+        } else {
+            statusEl.style.display = 'block';
+            statusEl.className = 'index-status index-missing';
+            statusEl.textContent = '⚠️ אינדקס לא נבנה — לחץ "בנה אינדקס" לחיפוש מהיר';
+        }
+    } catch(e) { statusEl.style.display = 'none'; }
+}
+
+document.getElementById('buildIndexBtn')?.addEventListener('click', async () => {
+    const dbPath = document.getElementById('dbPath').value.trim();
+    const btn = document.getElementById('buildIndexBtn');
+    const statusEl = document.getElementById('indexStatus');
+    btn.disabled = true;
+    btn.textContent = '⏳ בונה אינדקס...';
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.className = 'index-status index-building'; statusEl.textContent = 'בונה אינדקס — עשוי לקחת 1-3 דקות...'; }
+    // הקשב לאירועי התקדמות
+    const unlisten = await window.__TAURI__?.event?.listen('index-progress', e => {
+        if (statusEl) statusEl.textContent = e.payload;
+        if (e.payload === 'הושלם') {
+            btn.disabled = false;
+            btn.textContent = '🔄 בנה מחדש';
+            if (statusEl) { statusEl.className = 'index-status index-ok'; statusEl.textContent = '✅ אינדקס נבנה בהצלחה!'; }
+            if (unlisten) unlisten();
+        } else if (String(e.payload).startsWith('שגיאה')) {
+            btn.disabled = false;
+            btn.textContent = '⚡ בנה אינדקס';
+            if (unlisten) unlisten();
+        }
+    });
+    try {
+        await invoke('build_ref_index', { dbPath: dbPath || '' });
+    } catch(e) {
+        btn.disabled = false;
+        btn.textContent = '⚡ בנה אינדקס';
+        if (statusEl) { statusEl.className = 'index-status index-error'; statusEl.textContent = 'שגיאה: ' + e; }
+    }
+});
+
+// בדוק סטטוס בהפעלה
+window.addEventListener('DOMContentLoaded', checkAndShowIndexStatus);
+document.getElementById('dbPath')?.addEventListener('change', checkAndShowIndexStatus);
+
 // ══════════════════════════════════════════════════════
 //  בודק מקורות  |  main.js  (Tauri)  v4.1
 //  תקשורת Frontend↔Backend: invoke + listen (לא fetch/SSE)
