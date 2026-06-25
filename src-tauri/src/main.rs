@@ -710,7 +710,7 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
         if top.is_empty() { continue; }
         return top.into_iter().filter_map(|(_, addr)| {
             let doc: TantivyDocument = searcher.doc(addr).ok()?;
-            TantivyValue::as_u64(doc.get_first(fld_id)?).map(|v| v as i64)
+            doc.get_first(fld_id).and_then(|v| TantivyValue::as_u64(v)).map(|v| v as i64)
         }).collect();
     }
     vec![]
