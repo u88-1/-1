@@ -25,7 +25,8 @@ use tokio::task::JoinSet;
 // ── Tantivy ───────────────────────────────────────────────────────────────
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Schema, TEXT, STORED, NumericOptions};
+use tantivy::schema::{Schema as TantivySchema, TEXT, STORED, NumericOptions};
+use tantivy::schema::Value as TantivyValue;
 use tantivy::{Index, IndexWriter, TantivyDocument};
 
 const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
@@ -621,8 +622,8 @@ fn tantivy_index_path(db_path: &str) -> std::path::PathBuf {
 }
 
 /// בונה schema של Tantivy עם שדות: line_id (FAST+STORED), he_ref (TEXT+STORED)
-fn build_schema() -> (Schema, tantivy::schema::Field, tantivy::schema::Field) {
-    let mut builder = Schema::builder();
+fn build_schema() -> (TantivySchema, tantivy::schema::Field, tantivy::schema::Field) {
+    let mut builder = TantivySchema::builder();
     let id_opts = NumericOptions::default().set_fast().set_stored();
     let line_id = builder.add_u64_field("line_id", id_opts);
     let he_ref  = builder.add_text_field("he_ref",  TEXT | STORED);
@@ -717,7 +718,7 @@ pub struct TantivyHit {
 
 /// מנקה תו מיוחד מ-Tantivy query string
 fn escape_tantivy(s: &str) -> String {
-    const SPECIAL: &str = "+-&|!(){}[]^~*?:\/";
+    const SPECIAL: &str = r"+-&|!(){}[]^~*?:\/";
     s.chars().flat_map(|c| {
         if SPECIAL.contains(c) || c == '"' {
             vec!['\\', c]
@@ -743,7 +744,7 @@ pub fn tantivy_search(
     let mut qp = QueryParser::for_index(index, vec![fld_ref]);
 
     // exact phrase → prefix → fuzzy
-    let exact_q_str   = format!("he_ref:"{}"", escaped);
+    let exact_q_str   = format!("he_ref:\"{}\"", escaped);
     let prefix_q_str  = format!("he_ref:{}*",    escaped);
     let fuzzy_q_str   = format!("he_ref:{}~1",   escaped);
 
@@ -760,10 +761,10 @@ pub fn tantivy_search(
                 for (_score, addr) in top {
                     if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
                         let id = doc.get_first(fld_id)
-                            .and_then(|v| v.as_u64())
+                            .and_then(|v| TantivyValue::as_u64(v))
                             .unwrap_or(0) as i64;
                         let href = doc.get_first(fld_ref)
-                            .and_then(|v| v.as_str())
+                            .and_then(|v| TantivyValue::as_str(v))
                             .unwrap_or("")
                             .to_string();
                         hits.push(TantivyHit { line_id: id, he_ref: href });
@@ -1242,8 +1243,13 @@ fn scan_chunk(
     processed_counter: &AtomicUsize,
     found_counter: &AtomicI64,
     not_found_counter: &AtomicI64,
-    tantivy_idx: Option<&tantivy::Index>,
+    tantivy_path: Option<std::path::PathBuf>,
 ) -> Result<(Vec<(usize, ResultOut)>, Vec<usize>, bool), String> {
+    // פתח Tantivy index (אם קיים) — נפתח כאן כי scan_chunk רץ בthread נפרד
+    let tantivy_index: Option<tantivy::Index> = tantivy_path
+        .and_then(|p| tantivy::Index::open_in_dir(&p).ok());
+    let tantivy_idx: Option<&tantivy::Index> = tantivy_index.as_ref();
+
     let opendb = open_db(db_path)?;
     let s = &opendb.schema;
     let base = select_prefix(s);
@@ -1499,6 +1505,12 @@ fn local_scan_parallel(
     let mut not_found: Vec<usize> = Vec::new();
     let mut worker_err: Option<String> = None;
 
+    // בדוק אם Tantivy index קיים — נעביר את ה-path לכל thread
+    let tantivy_idx_path: Option<std::path::PathBuf> = {
+        let p = tantivy_index_path(db_path);
+        if p.exists() { Some(p) } else { None }
+    };
+
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
         // &AtomicUsize / &AtomicI64 מממשים Copy — כל closure מקבל עותק של
@@ -1507,14 +1519,6 @@ fn local_scan_parallel(
         let p_ref: &AtomicUsize = &processed_counter;
         let f_ref: &AtomicI64 = &found_counter;
         let nf_ref: &AtomicI64 = &not_found_counter;
-        // פתח את ה-Tantivy index פעם אחת לפני הפיצול ל-threads.
-        // Index::reader() thread-safe לקריאה — מועבר ל-scan_chunk כ-Option<&Index>.
-        let tantivy_index: Option<tantivy::Index> = tantivy_index_path(db_path)
-            .exists()
-            .then(|| tantivy::Index::open_in_dir(tantivy_index_path(db_path)).ok())
-            .flatten();
-        let tidx_ref: Option<&tantivy::Index> = tantivy_index.as_ref();
-
         for w in 0..num_workers {
             let start = w * chunk_size;
             if start >= total {
@@ -1522,6 +1526,7 @@ fn local_scan_parallel(
             }
             let end = (start + chunk_size).min(total);
             let chunk = &refs[start..end];
+            let tidx_path_clone = tantivy_idx_path.clone();
             handles.push(scope.spawn(move || {
                 scan_chunk(
                     db_path,
@@ -1535,7 +1540,7 @@ fn local_scan_parallel(
                     p_ref,
                     f_ref,
                     nf_ref,
-                    tidx_ref,
+                    tidx_path_clone,
                 )
             }));
         }
