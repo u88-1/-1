@@ -258,9 +258,15 @@ fn normalize_ref(input: &str) -> String {
 static RE_HEBNUM: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r#"(?<![א-ת])([א-ת׳״"']{1,6})(?![א-ת])"#).unwrap());
 static RE_PAGE_A: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?א"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?א['׳]?"#).unwrap());
 static RE_PAGE_B: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?ב"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?ב['׳]?"#).unwrap());
+// הסרת "דף" לפני מספר/אות — "דף לג" → "לג"
+static RE_DAF: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"דף\s+").unwrap());
+// הסרת "עמ'" / "עמוד" לפני מספר — מאחר שכבר מטופל ב-RE_PAGE_A/B
+static RE_SIMAN_COMMA: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"פרש(?:ה|ת)\s+([א-ת]{1,4}['׳]?|\d+)[,،،]\s*סי(?:מן?)?['׳]?\s+([א-ת]{1,4}['׳]?|\d+)").unwrap());
 static RE_PAGE_DIGIT: Lazy<FRegex> = Lazy::new(|| FRegex::new(r"(\d+)([אב])\b").unwrap());
 static RE_PAGE_HEBDOT: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r"([א-ת]{1,4})([.:])(?!\d)").unwrap());
@@ -268,7 +274,7 @@ static RE_PAGE_HEBDOT: Lazy<FRegex> =
 // מדרש רבה: נרמול פורמט "פרשה X סימן Y" → "X, Y" (לפני חיפוש מקומי/Sefaria)
 // תואם גם: "פרשה ח'", "פרשה א'", "סי' ב'", "סי׳ ה" וכו'
 static RE_PARASHA_SIMAN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"פרש(?:ה|ת)\s+([א-ת]{1,4}['׳]?|\d+)(?:\s+סימ[ן]\s+([א-ת]{1,4}['׳]?|\d+))?")
+    Regex::new(r"פרש(?:ה|ת)\s+([א-ת]{1,4}['׳]?|\d+)(?:[,،،]?\s*סי(?:מן?)?['׳]?\s+([א-ת]{1,4}['׳]?|\d+))?")
         .unwrap()
 });
 // נרמול "פרשה X" בלי סימן (לכיסוי מקרה שה-DB מאחסן רק ברמת הפרשה)
@@ -332,7 +338,11 @@ fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
 
 /// בניית סט וריאנטים לחיפוש (סדר עדיפות נשמר, ללא כפילויות).
 fn generate_variants(reference: &str) -> Vec<String> {
-    let base = normalize_ref(reference);
+    let raw = normalize_ref(reference);
+    // הסר "דף " לפני מספר/אות — "ברכות דף לג" → "ברכות לג"
+    let base = RE_DAF.replace_all(&raw, "").to_string();
+    let base = base.trim().to_string();
+    // אם "דף" הוסר, הוסף גם את הגרסה המקורית כוריאנט ראשון
     let mut order: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut push = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
@@ -340,7 +350,21 @@ fn generate_variants(reference: &str) -> Vec<String> {
             order.push(v);
         }
     };
+    // אם "דף" הוסר, הוסף גם את הגרסה המקורית
+    if raw != base {
+        push(raw.clone(), &mut order, &mut seen);
+    }
     push(base.clone(), &mut order, &mut seen);
+
+    // "פרשה X, סימן Y" עם פסיק (נפוץ בכתיבה ידנית)
+    if let Some(caps) = RE_SIMAN_COMMA.captures(&base) {
+        let parasha = caps.get(1).map(|m| m.as_str().trim_matches(|c| c == ''' || c == '׳')).unwrap_or("");
+        let siman   = caps.get(2).map(|m| m.as_str().trim_matches(|c| c == ''' || c == '׳')).unwrap_or("");
+        let before  = &base[..caps.get(0).unwrap().start()].trim_end();
+        push(format!("{} {}, {}", before, parasha, siman), &mut order, &mut seen);
+        push(format!("{} {}:{}", before, parasha, siman), &mut order, &mut seen);
+        push(format!("{} {}", before, parasha), &mut order, &mut seen);
+    }
 
     // נרמול "פרשה X סימן Y" (מדרש רבה וספרות דומה) → "X, Y" + "X" כוריאנטים
     // נעשה לפני שאר הנרמולים כך שהוריאנטים המנורמלים עוברים גם עיבוד גימטריה.
