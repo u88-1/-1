@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 // Tantivy — בדיוק כמו בדוגמה הרשמית
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::*;  // TEXT, STORED, Schema, Field וכו'
+use tantivy::schema::{Schema as TantivySchema, Field, TEXT, STORED, FAST, OwnedValue};
 use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyDocument};
 
 // ── Tantivy ───────────────────────────────────────────────────────────────
@@ -547,7 +547,7 @@ fn extract_text(path: &str) -> Result<String, String> {
 //  5. שכבת DB — סכמה דינמית (camelCase של אוצריא או snake_case), חיבור יחיד
 // ════════════════════════════════════════════════════════════════════════════
 
-struct DbDbSchema {
+struct DbSchema {
     he_ref: String,
     line_index: String,
     content: String,
@@ -587,7 +587,7 @@ fn book_columns(conn: &Connection) -> Vec<String> {
     cols
 }
 
-fn detect_schema(conn: &Connection) -> DbDbSchema {
+fn detect_schema(conn: &Connection) -> DbSchema {
     let lc = line_columns(conn);
     let bc = book_columns(conn);
     let has = |cols: &[String], name: &str| cols.iter().any(|c| c == name);
@@ -626,7 +626,7 @@ pub fn build_tantivy_index(db_path: &str) -> Result<(), String> {
     std::fs::create_dir_all(&idx_path).map_err(|e| e.to_string())?;
 
     // schema — בדיוק כמו בדוגמה הרשמית
-    let mut schema_builder = Schema::builder();
+    let mut schema_builder = TantivySchema::builder();
     let fld_id  = schema_builder.add_u64_field("line_id", STORED | FAST);
     let fld_ref = schema_builder.add_text_field("he_ref", TEXT | STORED);
     let schema  = schema_builder.build();
@@ -786,7 +786,7 @@ fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
     })
 }
 
-fn select_prefix(s: &Schema) -> String {
+fn select_prefix(s: &DbSchema) -> String {
     format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
          b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
