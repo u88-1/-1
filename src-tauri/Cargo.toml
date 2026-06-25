@@ -44,6 +44,8 @@ zip = "2"               # .docx (zip של word/document.xml)
 pdf-extract = "0.7"     # .pdf (חילוץ טקסט קיים, לא OCR)
 
 
+tantivy = { version = "0.22", default-features = false, features = ["mmap"] }
+
 [features]
 # מאפשר custom-protocol בבניית release (ברירת מחדל של tauri)
 custom-protocol = ["tauri/custom-protocol"]
