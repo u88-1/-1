@@ -717,8 +717,9 @@ pub struct TantivyHit {
 
 /// מנקה תו מיוחד מ-Tantivy query string
 fn escape_tantivy(s: &str) -> String {
+    const SPECIAL: &str = "+-&|!(){}[]^~*?:\/";
     s.chars().flat_map(|c| {
-        if "+-&|!(){}[]^"~*?:\\/".contains(c) {
+        if SPECIAL.contains(c) || c == '"' {
             vec!['\\', c]
         } else {
             vec![c]
@@ -876,7 +877,8 @@ fn escape_like(s: &str) -> String {
 
 /// בניית שאילתת FTS5 בטוחה (phrase match) מתוך וריאנט.
 fn fts_query(v: &str) -> String {
-    format!("\"{}\"", v.replace('"', "\"\""))
+    let escaped = v.replace('"', "''");
+    format!("\"{}\"", escaped)
 }
 
 /// בניית שאילתת IN עם N placeholders לבדיקת כל הוריאנטים בפעם אחת.
@@ -1253,10 +1255,7 @@ fn scan_chunk(
     // שאילתות עם ESCAPE '\' למניעת ג'וקרים לא מכוונים
     let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
     let fts_sql = format!(
-        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
-         b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line_fts f \
-         JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id \
-         WHERE line_fts MATCH ? LIMIT ?",
+        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line_fts f JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id WHERE line_fts MATCH ? LIMIT ?",
         li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title, fp = s.file_path, bid = s.book_id
     );
     let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
