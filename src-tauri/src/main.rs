@@ -547,7 +547,7 @@ fn extract_text(path: &str) -> Result<String, String> {
 //  5. שכבת DB — סכמה דינמית (camelCase של אוצריא או snake_case), חיבור יחיד
 // ════════════════════════════════════════════════════════════════════════════
 
-struct Schema {
+struct DbDbSchema {
     he_ref: String,
     line_index: String,
     content: String,
@@ -559,7 +559,7 @@ struct Schema {
 struct OpenDb {
     path: String,
     conn: Connection,
-    schema: Schema,
+    schema: DbSchema,
     fts: bool,
 }
 
@@ -587,11 +587,11 @@ fn book_columns(conn: &Connection) -> Vec<String> {
     cols
 }
 
-fn detect_schema(conn: &Connection) -> Schema {
+fn detect_schema(conn: &Connection) -> DbDbSchema {
     let lc = line_columns(conn);
     let bc = book_columns(conn);
     let has = |cols: &[String], name: &str| cols.iter().any(|c| c == name);
-    Schema {
+    DbSchema {
         he_ref: if has(&lc, "heRef") { "heRef" } else { "he_ref" }.to_string(),
         line_index: if has(&lc, "lineIndex") { "lineIndex" } else { "line_index" }.to_string(),
         content: "content".to_string(),
