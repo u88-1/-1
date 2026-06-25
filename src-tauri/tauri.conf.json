@@ -53,10 +53,7 @@
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine",
-        "createDesktopShortcut": true,
-        "createStartMenuShortcut": true,
-        "startMenuFolder": "בודק מקורות"
+        "installMode": "perMachine"
       }
     },
     "publisher": "u88-1"
