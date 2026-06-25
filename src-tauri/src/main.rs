@@ -1111,7 +1111,7 @@ fn scan_chunk(
             if !out.is_empty() {
                 has_exact = true;
             }
-        }}
+        }
 
         // ── שלב 2: prefix per-variant — רק אם אין exact ─────────────────
         if !has_exact {
