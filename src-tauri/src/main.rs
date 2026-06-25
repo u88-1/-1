@@ -22,6 +22,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+// Tantivy — בדיוק כמו בדוגמה הרשמית
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::schema::*;  // TEXT, STORED, Schema, Field וכו'
+use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyDocument};
+
 // ── Tantivy ───────────────────────────────────────────────────────────────
 
 
@@ -604,6 +610,115 @@ fn detect_fts(conn: &Connection) -> bool {
     .is_ok()
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  Tantivy index על he_ref — בניה חד-פעמית + חיפוש מהיר
+// ════════════════════════════════════════════════════════════════════════════
+
+const TANTIVY_INDEX_DIR: &str = "bodek_heref_index";
+
+fn tantivy_index_path(db_path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(db_path);
+    p.parent().unwrap_or(std::path::Path::new(".")).join(TANTIVY_INDEX_DIR)
+}
+
+pub fn build_tantivy_index(db_path: &str) -> Result<(), String> {
+    let idx_path = tantivy_index_path(db_path);
+    std::fs::create_dir_all(&idx_path).map_err(|e| e.to_string())?;
+
+    // schema — בדיוק כמו בדוגמה הרשמית
+    let mut schema_builder = Schema::builder();
+    let fld_id  = schema_builder.add_u64_field("line_id", STORED | FAST);
+    let fld_ref = schema_builder.add_text_field("he_ref", TEXT | STORED);
+    let schema  = schema_builder.build();
+
+    let index = Index::create_in_dir(&idx_path, schema.clone()).map_err(|e| e.to_string())?;
+    let mut writer: IndexWriter = index.writer(128_000_000).map_err(|e| e.to_string())?;
+
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA mmap_size=4294967296;").map_err(|e| e.to_string())?;
+
+    // גלה את שם עמודת he_ref
+    let he_ref_col: String = {
+        let mut s = conn.prepare("PRAGMA table_info(line)").map_err(|e| e.to_string())?;
+        let cols: Vec<String> = s.query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        cols.into_iter()
+            .find(|c| c.eq_ignore_ascii_case("he_ref") || c.eq_ignore_ascii_case("heRef"))
+            .ok_or_else(|| "לא נמצאה עמודת he_ref".to_string())?
+    };
+
+    let sql = format!("SELECT id, {c} FROM line WHERE {c} IS NOT NULL AND {c} != ''", c = he_ref_col);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut count = 0u64;
+
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    }).map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (id, href) = row.map_err(|e| e.to_string())?;
+        let mut doc = TantivyDocument::default();
+        doc.add_u64(fld_id, id as u64);
+        doc.add_text(fld_ref, &href);
+        writer.add_document(doc).map_err(|e| e.to_string())?;
+        count += 1;
+        if count % 500_000 == 0 {
+            writer.commit().map_err(|e| e.to_string())?;
+        }
+    }
+    writer.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -> Vec<i64> {
+    let idx_path = tantivy_index_path(db_path);
+    if !idx_path.exists() { return vec![]; }
+    let Ok(index) = Index::open_in_dir(&idx_path) else { return vec![]; };
+    let Ok(reader) = index.reader_builder()
+        .reload_policy(ReloadPolicy::Manual)
+        .try_into() else { return vec![]; };
+    let searcher = reader.searcher();
+    let schema  = index.schema();
+    let fld_id  = schema.get_field("line_id").unwrap();
+    let fld_ref = schema.get_field("he_ref").unwrap();
+
+    let mut qp = QueryParser::for_index(&index, vec![fld_ref]);
+    // נסה exact → prefix → fuzzy
+    let escaped = variant.replace('"', "");
+    let queries = if fuzzy {
+        vec![
+            format!(r#"he_ref:"{}""#, escaped),
+            format!("he_ref:{}*", escaped),
+            format!("he_ref:{}~1", escaped),
+        ]
+    } else {
+        vec![
+            format!(r#"he_ref:"{}""#, escaped),
+            format!("he_ref:{}*", escaped),
+        ]
+    };
+
+    for q_str in &queries {
+        let Ok(q) = qp.parse_query(q_str) else { continue; };
+        let Ok(top) = searcher.search(&q, &TopDocs::with_limit(limit)) else { continue; };
+        if top.is_empty() { continue; }
+        return top.into_iter().filter_map(|(_, addr)| {
+            let doc: TantivyDocument = searcher.doc(addr).ok()?;
+            doc.get_first(fld_id)?.as_u64().map(|v| v as i64)
+        }).collect();
+    }
+    vec![]
+}
+
+fn tantivy_index_exists(db_path: &str) -> bool {
+    tantivy_index_path(db_path).join("meta.json").exists()
+}
+
 fn open_db(path: &str) -> Result<OpenDb, String> {
     let conn = Connection::open_with_flags(
         path,
@@ -1104,8 +1219,41 @@ fn scan_chunk(
         let mut has_exact = false;
         let mut has_prefix = false;
 
-        // ── שלב 1: batch exact על כל הוריאנטים בפעם אחת ──────────────────
-        if !variants.is_empty() {
+        // ── שלב 1: Tantivy (אם index קיים) אחרת batch exact ──────────────
+        let used_tantivy = if tantivy_index_exists(db_path) {
+            let mut found_any = false;
+            for v in variants {
+                let ids = tantivy_search(db_path, v, MAX_RESULTS_PER_REF as usize, false);
+                for id in ids {
+                    if seen.insert(id) {
+                        let row_sql = format!("{base}l.id = ? LIMIT ?");
+                        if let Ok(mut st) = opendb.conn.prepare(&row_sql) {
+                            let rows = st.query_map(params![id, 1i64], map_raw).ok();
+                            if let Some(rows) = rows {
+                                for row in rows.flatten() {
+                                    out.push(RowOut {
+                                        he_ref: row.he_ref,
+                                        book_title: row.book_title,
+                                        file_path: row.book_path,
+                                        line_index: Some(row.line_index),
+                                        line_id: Some(row.line_id),
+                                        content: strip_tags(&row.content),
+                                        match_type: "exact".to_string(),
+                                        sefaria_url: None,
+                                    });
+                                }
+                            }
+                        }
+                        found_any = true;
+                        has_exact = true;
+                    }
+                }
+                if has_exact { break; }
+            }
+            found_any
+        } else { false };
+
+        if !used_tantivy && !variants.is_empty() {
             let batch_sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
             let _ = collect_batch(&opendb.conn, &batch_sql, variants, "exact", &mut seen, &mut out);
             if !out.is_empty() {
@@ -1725,6 +1873,25 @@ fn pick_file(app: AppHandle, filter: String) -> Option<String> {
         .map(|pb| pb.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn build_ref_index(db_path: String, app: AppHandle) -> Result<(), String> {
+    let path = if db_path.is_empty() { DEFAULT_DB_PATH.to_string() } else { db_path };
+    std::thread::spawn(move || {
+        let _ = app.emit("index-progress", "מתחיל...");
+        match build_tantivy_index(&path) {
+            Ok(_)  => { let _ = app.emit("index-progress", "הושלם"); }
+            Err(e) => { let _ = app.emit("index-progress", format!("שגיאה: {e}")); }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn check_ref_index(db_path: String) -> bool {
+    let path = if db_path.is_empty() { DEFAULT_DB_PATH.to_string() } else { db_path };
+    tantivy_index_exists(&path)
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  10. פתיחת תוצאה ישירות באוצריא
 // ════════════════════════════════════════════════════════════════════════════
@@ -1800,7 +1967,9 @@ fn main() {
             compare_abort,
             expand_page,
             pick_file,
-            open_in_otzaria
+            open_in_otzaria,
+            build_ref_index,
+            check_ref_index
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
