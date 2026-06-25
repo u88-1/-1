@@ -53,10 +53,7 @@
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "headerImage": null,
-        "sidebarImage": null,
         "installMode": "perMachine",
-        "shortcuts": true,
         "createDesktopShortcut": true,
         "createStartMenuShortcut": true,
         "startMenuFolder": "בודק מקורות"
