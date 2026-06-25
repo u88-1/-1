@@ -23,11 +23,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 // ── Tantivy ───────────────────────────────────────────────────────────────
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::{Schema as TantivySchema, TEXT, STORED, NumericOptions};
-use tantivy::schema::Value as TantivyValue;
-use tantivy::{Index, IndexWriter, TantivyDocument};
+
 
 const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
 const MAX_RESULTS_PER_REF: i64 = 5;
@@ -37,9 +33,7 @@ const SEFARIA_CONCURRENCY: usize = 6;
 const SEFARIA_CACHE_TTL_SECS: i64 = 60 * 60 * 24 * 180;
 // מספר חיבורי קריאה-בלבד מקביליים לסריקה המקומית. עם Tantivy אנחנו פחות
 // תלויים ב-IO כבד, אבל עדיין שומרים workers לסריקת תוכן מורחב.
-const MAX_SCAN_WORKERS: usize = 8;
-// נתיב ה-index של Tantivy לצד ה-DB
-const TANTIVY_INDEX_SUBDIR: &str = "bodek_heref_index";
+const MAX_SCAN_WORKERS: usize = 4;
 
 // ════════════════════════════════════════════════════════════════════════════
 //  1. נתוני ליבה — מסכתות, גימטריה, קיצורים, מיפוי Sefaria
@@ -610,178 +604,6 @@ fn detect_fts(conn: &Connection) -> bool {
     .is_ok()
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  Tantivy index על he_ref — בניה חד-פעמית + חיפוש מהיר
-// ════════════════════════════════════════════════════════════════════════════
-
-/// נתיב ה-index: תיקיה לצד ה-DB (למשל C:/ProgramData/otzaria/books/bodek_heref_index)
-fn tantivy_index_path(db_path: &str) -> std::path::PathBuf {
-    let p = std::path::Path::new(db_path);
-    let dir = p.parent().unwrap_or(std::path::Path::new("."));
-    dir.join(TANTIVY_INDEX_SUBDIR)
-}
-
-/// בונה schema של Tantivy עם שדות: line_id (FAST+STORED), he_ref (TEXT+STORED)
-fn build_schema() -> (TantivySchema, tantivy::schema::Field, tantivy::schema::Field) {
-    let mut builder = TantivySchema::builder();
-    let id_opts = NumericOptions::default().set_fast().set_stored();
-    let line_id = builder.add_u64_field("line_id", id_opts);
-    let he_ref  = builder.add_text_field("he_ref",  TEXT | STORED);
-    (builder.build(), line_id, he_ref)
-}
-
-/// בודק אם ה-index קיים וממנו אפשר לקרוא (לא ריק)
-fn tantivy_index_exists(db_path: &str) -> bool {
-    let idx_path = tantivy_index_path(db_path);
-    if !idx_path.exists() { return false; }
-    // נסה לפתוח — אם נכשל, נבנה מחדש
-    let (schema, _, _) = build_schema();
-    Index::open_in_dir(&idx_path).is_ok()
-}
-
-/// בונה את ה-index מה-DB (פעולה חד-פעמית, ~1-3 דק' על DB של 6GB).
-/// קורא את כל השורות של he_ref + id מה-DB ומאנדקס אותן.
-pub fn build_tantivy_index(db_path: &str) -> Result<(), String> {
-    let idx_path = tantivy_index_path(db_path);
-    std::fs::create_dir_all(&idx_path).map_err(|e| e.to_string())?;
-
-    let (schema, fld_id, fld_ref) = build_schema();
-    let index = Index::create_in_dir(&idx_path, schema.clone())
-        .map_err(|e| e.to_string())?;
-
-    // tokenizer עברי — simple tokenizer (whitespace + lowercase) מספיק כי
-    // אנחנו מחפשים שמות הפניה, לא פרוזה
-    let mut writer: IndexWriter = index
-        .writer(256 * 1024 * 1024) // 256MB buffer — מהיר יותר
-        .map_err(|e| e.to_string())?;
-
-    // פתח את ה-DB ב-read-only
-    let conn = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ).map_err(|e| e.to_string())?;
-
-    // הגדרת PRAGMA למהירות קריאה מקסימלית
-    conn.execute_batch("PRAGMA journal_mode=OFF; PRAGMA mmap_size=4294967296;")
-        .map_err(|e| e.to_string())?;
-
-    // קרא את כל he_ref + id — נסה שמות עמודות שונים
-    let sql = "SELECT id, he_ref FROM line WHERE he_ref IS NOT NULL AND he_ref != ''
-               UNION ALL
-               SELECT id, heRef FROM line WHERE heRef IS NOT NULL AND heRef != ''
-               LIMIT 0"; // רק לבדיקה — נמצא את השם הנכון
-    
-    // מצא את שם עמודת he_ref בפועל
-    let he_ref_col: String = {
-        let mut s = conn.prepare("PRAGMA table_info(line)").map_err(|e| e.to_string())?;
-        let cols: Vec<String> = s.query_map([], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        cols.iter().find(|c| c.eq_ignore_ascii_case("he_ref") || c.eq_ignore_ascii_case("heRef"))
-            .cloned()
-            .ok_or_else(|| "לא נמצאה עמודת he_ref בטבלת line".to_string())?
-    };
-
-    let select = format!("SELECT id, {} FROM line WHERE {} IS NOT NULL AND {} != ''",
-        he_ref_col, he_ref_col, he_ref_col);
-    let mut stmt = conn.prepare(&select).map_err(|e| e.to_string())?;
-
-    let mut count = 0u64;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| e.to_string())?;
-
-    for row in rows {
-        let (id, href) = row.map_err(|e| e.to_string())?;
-        let mut doc = TantivyDocument::default();
-        doc.add_u64(fld_id, id as u64);
-        doc.add_text(fld_ref, &href);
-        writer.add_document(doc).map_err(|e| e.to_string())?;
-        count += 1;
-        if count % 500_000 == 0 {
-            writer.commit().map_err(|e| e.to_string())?;
-        }
-    }
-
-    writer.commit().map_err(|e| e.to_string())?;
-    eprintln!("[tantivy] indexed {} rows", count);
-    Ok(())
-}
-
-/// תוצאת חיפוש Tantivy — line_id + he_ref
-#[derive(Debug, Clone)]
-pub struct TantivyHit {
-    pub line_id: i64,
-    pub he_ref:  String,
-}
-
-/// מנקה תו מיוחד מ-Tantivy query string
-fn escape_tantivy(s: &str) -> String {
-    const SPECIAL: &str = r"+-&|!(){}[]^~*?:\/";
-    s.chars().flat_map(|c| {
-        if SPECIAL.contains(c) || c == '"' {
-            vec!['\\', c]
-        } else {
-            vec![c]
-        }
-    }).collect()
-}
-
-/// חיפוש מהיר ב-Tantivy index.
-/// strategy: exact phrase → prefix → fuzzy
-pub fn tantivy_search(
-    index: &Index,
-    variant: &str,
-    limit: usize,
-    fuzzy: bool,
-) -> Result<Vec<TantivyHit>, String> {
-    let (schema, fld_id, fld_ref) = build_schema();
-    let reader = index.reader().map_err(|e| e.to_string())?;
-    let searcher = reader.searcher();
-    let escaped = escape_tantivy(variant);
-
-    let mut qp = QueryParser::for_index(index, vec![fld_ref]);
-
-    // exact phrase → prefix → fuzzy
-    let exact_q_str   = format!("he_ref:\"{}\"", escaped);
-    let prefix_q_str  = format!("he_ref:{}*",    escaped);
-    let fuzzy_q_str   = format!("he_ref:{}~1",   escaped);
-
-    let q_strs: Vec<&str> = if fuzzy {
-        vec![exact_q_str.as_str(), prefix_q_str.as_str(), fuzzy_q_str.as_str()]
-    } else {
-        vec![exact_q_str.as_str(), prefix_q_str.as_str()]
-    };
-
-    let mut hits: Vec<TantivyHit> = Vec::new();
-    for q_str in &q_strs {
-        if let Ok(q) = qp.parse_query(q_str) {
-            if let Ok(top) = searcher.search(&q, &TopDocs::with_limit(limit)) {
-                for (_score, addr) in top {
-                    if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
-                        let id = doc.get_first(fld_id)
-                            .and_then(|v| TantivyValue::as_u64(&v))
-                            .unwrap_or(0) as i64;
-                        let href = doc.get_first(fld_ref)
-                            .and_then(|v| TantivyValue::as_str(&v))
-                            .unwrap_or("")
-                            .to_string();
-                        hits.push(TantivyHit { line_id: id, he_ref: href });
-                    }
-                }
-                if !hits.is_empty() { break; }
-            }
-        }
-    }
-    Ok(hits)
-}
-
-/// State שמחזיק את ה-Index (thread-safe)
-pub struct TantivyState {
-    pub index: Option<Index>,
-}
-
 fn open_db(path: &str) -> Result<OpenDb, String> {
     let conn = Connection::open_with_flags(
         path,
@@ -1243,20 +1065,10 @@ fn scan_chunk(
     processed_counter: &AtomicUsize,
     found_counter: &AtomicI64,
     not_found_counter: &AtomicI64,
-    tantivy_path: Option<std::path::PathBuf>,
 ) -> Result<(Vec<(usize, ResultOut)>, Vec<usize>, bool), String> {
-    // פתח Tantivy index (אם קיים) — נפתח כאן כי scan_chunk רץ בthread נפרד
-    let tantivy_index: Option<tantivy::Index> = tantivy_path
-        .and_then(|p| tantivy::Index::open_in_dir(&p).ok());
-    let tantivy_idx: Option<&tantivy::Index> = tantivy_index.as_ref();
-
     let opendb = open_db(db_path)?;
     let s = &opendb.schema;
     let base = select_prefix(s);
-
-    // שאילתת אחזור לפי id — לשימוש לאחר Tantivy מצא line_id
-    let by_id_sql = format!("{base}l.id = ? LIMIT ?", base = base);
-    let mut stmt_by_id = opendb.conn.prepare(&by_id_sql).map_err(|e| e.to_string())?;
 
     // שאילתות עם ESCAPE '\' למניעת ג'וקרים לא מכוונים
     let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
@@ -1292,89 +1104,17 @@ fn scan_chunk(
         let mut has_exact = false;
         let mut has_prefix = false;
 
-        // ── שלב 1: Tantivy — מהיר כמו אוצריא ───────────────────────────────
-        // אם יש index, נחפש דרכו (exact → prefix) ואז נאחזר שורות מ-SQLite לפי id.
-        // זה מהיר בסדרי גודל מ-LIKE כי Tantivy index כולו נמצא ב-RAM.
-        if let Some(tidx) = tantivy_idx {
-            'tantivy: for v in variants {
-                if let Ok(hits) = tantivy_search(tidx, v, MAX_RESULTS_PER_REF as usize, false) {
-                    for hit in &hits {
-                        if seen.insert(hit.line_id) {
-                            // אחזר את השורה המלאה מ-SQLite לפי id (מהיר — primary key)
-                            let rows = stmt_by_id.query_map(
-                                params![hit.line_id, MAX_RESULTS_PER_REF],
-                                map_raw
-                            ).ok();
-                            if let Some(rows) = rows {
-                                for row in rows.flatten() {
-                                    let match_t = if row.he_ref.eq_ignore_ascii_case(v) {
-                                        "exact"
-                                    } else {
-                                        "prefix"
-                                    };
-                                    if match_t == "exact" { has_exact = true; }
-                                    else { has_prefix = true; }
-                                    out.push(RowOut {
-                                        he_ref: row.he_ref,
-                                        book_title: row.book_title,
-                                        file_path: row.book_path,
-                                        line_index: Some(row.line_index),
-                                        line_id: Some(row.line_id),
-                                        content: strip_tags(&row.content),
-                                        match_type: match_t.to_string(),
-                                        sefaria_url: None,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    if has_exact || has_prefix { break 'tantivy; }
-                }
+        // ── שלב 1: batch exact על כל הוריאנטים בפעם אחת ──────────────────
+        if !variants.is_empty() {
+            let batch_sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
+            let _ = collect_batch(&opendb.conn, &batch_sql, variants, "exact", &mut seen, &mut out);
+            if !out.is_empty() {
+                has_exact = true;
             }
-            // fuzzy דרך Tantivy אם לא נמצא כלום
-            if !has_exact && !has_prefix && fuzzy {
-                for v in variants {
-                    if v.chars().count() < 4 { continue; }
-                    if let Ok(hits) = tantivy_search(tidx, v, MAX_RESULTS_PER_REF as usize, true) {
-                        for hit in hits {
-                            if seen.insert(hit.line_id) {
-                                let rows = stmt_by_id.query_map(
-                                    params![hit.line_id, MAX_RESULTS_PER_REF],
-                                    map_raw
-                                ).ok();
-                                if let Some(rows) = rows {
-                                    for row in rows.flatten() {
-                                        out.push(RowOut {
-                                            he_ref: row.he_ref,
-                                            book_title: row.book_title,
-                                            file_path: row.book_path,
-                                            line_index: Some(row.line_index),
-                                            line_id: Some(row.line_id),
-                                            content: strip_tags(&row.content),
-                                            match_type: "fuzzy".to_string(),
-                                            sefaria_url: None,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        if !out.is_empty() { break; }
-                    }
-                }
-            }
-        } else {
-            // ── Fallback: batch exact על SQLite (ללא Tantivy) ─────────────
-            if !variants.is_empty() {
-                let batch_sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
-                let _ = collect_batch(&opendb.conn, &batch_sql, variants, "exact", &mut seen, &mut out);
-                if !out.is_empty() {
-                    has_exact = true;
-                }
-            }
-        }
+        }}
 
-        // ── שלב 2: prefix per-variant — רק אם אין Tantivy ואין exact ────
-        if tantivy_idx.is_none() && !has_exact {
+        // ── שלב 2: prefix per-variant — רק אם אין exact ─────────────────
+        if !has_exact {
             'variants: for v in variants {
                 let rows_before = out.len();
                 let _ = collect_single_stmt(
@@ -1505,12 +1245,6 @@ fn local_scan_parallel(
     let mut not_found: Vec<usize> = Vec::new();
     let mut worker_err: Option<String> = None;
 
-    // בדוק אם Tantivy index קיים — נעביר את ה-path לכל thread
-    let tantivy_idx_path: Option<std::path::PathBuf> = {
-        let p = tantivy_index_path(db_path);
-        if p.exists() { Some(p) } else { None }
-    };
-
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
         // &AtomicUsize / &AtomicI64 מממשים Copy — כל closure מקבל עותק של
@@ -1526,7 +1260,6 @@ fn local_scan_parallel(
             }
             let end = (start + chunk_size).min(total);
             let chunk = &refs[start..end];
-            let tidx_path_clone = tantivy_idx_path.clone();
             handles.push(scope.spawn(move || {
                 scan_chunk(
                     db_path,
@@ -1540,7 +1273,6 @@ fn local_scan_parallel(
                     p_ref,
                     f_ref,
                     nf_ref,
-                    tidx_path_clone,
                 )
             }));
         }
@@ -1994,32 +1726,6 @@ fn pick_file(app: AppHandle, filter: String) -> Option<String> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  9.5 פקודות Tantivy — בנה index + בדוק סטטוס
-// ════════════════════════════════════════════════════════════════════════════
-
-/// בונה את ה-Tantivy index על he_ref (פעולה חד-פעמית).
-/// מופעל מה-frontend לפני ריצה ראשונה, או כשה-DB השתנה.
-#[tauri::command]
-fn build_ref_index(db_path: String, app: AppHandle) -> Result<(), String> {
-    let path = if db_path.is_empty() { DEFAULT_DB_PATH.to_string() } else { db_path };
-    std::thread::spawn(move || {
-        let _ = app.emit("index-progress", "מתחיל בנייה...");
-        match build_tantivy_index(&path) {
-            Ok(_) => { let _ = app.emit("index-progress", "הושלם"); }
-            Err(e) => { let _ = app.emit("index-progress", format!("שגיאה: {e}")); }
-        }
-    });
-    Ok(())
-}
-
-/// בודק אם ה-index קיים ועדכני
-#[tauri::command]
-fn check_ref_index(db_path: String) -> bool {
-    let path = if db_path.is_empty() { DEFAULT_DB_PATH.to_string() } else { db_path };
-    tantivy_index_exists(&path)
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  10. פתיחת תוצאה ישירות באוצריא
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -2094,9 +1800,7 @@ fn main() {
             compare_abort,
             expand_page,
             pick_file,
-            open_in_otzaria,
-            build_ref_index,
-            check_ref_index
+            open_in_otzaria
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
