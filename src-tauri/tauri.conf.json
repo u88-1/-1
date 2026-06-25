@@ -42,7 +42,7 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "בודק מקורות",
+    "shortDescription": "בדיקת הפניות אוטומטית בספרות תורנית",
     "longDescription": "בדיקת הפניות אוטומטית בספרות תורנית מול מסד הנתונים של אוצריא ו-Sefaria",
     "copyright": "GPL-3.0",
     "windows": {
@@ -51,7 +51,9 @@
           "Hebrew",
           "English"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
       }
     },
     "publisher": "u88-1"
