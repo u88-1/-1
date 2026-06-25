@@ -761,10 +761,10 @@ pub fn tantivy_search(
                 for (_score, addr) in top {
                     if let Ok(doc) = searcher.doc::<TantivyDocument>(addr) {
                         let id = doc.get_first(fld_id)
-                            .and_then(|v| TantivyValue::as_u64(v))
+                            .and_then(|v| TantivyValue::as_u64(&v))
                             .unwrap_or(0) as i64;
                         let href = doc.get_first(fld_ref)
-                            .and_then(|v| TantivyValue::as_str(v))
+                            .and_then(|v| TantivyValue::as_str(&v))
                             .unwrap_or("")
                             .to_string();
                         hits.push(TantivyHit { line_id: id, he_ref: href });
