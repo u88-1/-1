@@ -546,7 +546,8 @@ document.addEventListener('click',(e)=>{
         btn.disabled=true;
         invoke('open_in_otzaria',{
             bookTitle:btn.dataset.bookTitle,
-            lineIndex:Number(btn.dataset.lineIndex)
+            lineIndex:Number(btn.dataset.lineIndex),
+            dbPath:document.getElementById('dbPath')?.value.trim()||null
         }).then(()=>{
             btn.textContent='✅ נפתח!';
             setTimeout(()=>{btn.textContent=orig;btn.disabled=false;},2000);
