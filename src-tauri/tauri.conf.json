@@ -51,9 +51,7 @@
           "Hebrew",
           "English"
         ],
-        "displayLanguageSelector": false,
-        "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine"
+        "displayLanguageSelector": false
       }
     },
     "publisher": "u88-1"
