@@ -25,7 +25,8 @@ use tokio::task::JoinSet;
 // Tantivy — בדיוק כמו בדוגמה הרשמית
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Schema as TantivySchema, Field, TEXT, STORED, FAST, OwnedValue};
+use tantivy::schema::{Schema as TantivySchema, TEXT, STORED, FAST};
+use tantivy::schema::Value as TantivyValue;
 use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyDocument};
 
 // ── Tantivy ───────────────────────────────────────────────────────────────
@@ -709,7 +710,7 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
         if top.is_empty() { continue; }
         return top.into_iter().filter_map(|(_, addr)| {
             let doc: TantivyDocument = searcher.doc(addr).ok()?;
-            doc.get_first(fld_id)?.as_u64().map(|v| v as i64)
+            TantivyValue::as_u64(doc.get_first(fld_id)?).map(|v| v as i64)
         }).collect();
     }
     vec![]
