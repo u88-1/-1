@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 // ── Tantivy ───────────────────────────────────────────────────────────────
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Schema, TEXT, STORED, FAST};
+use tantivy::schema::{Schema, TEXT, STORED, NumericOptions};
 use tantivy::{Index, IndexWriter, TantivyDocument};
 
 const DEFAULT_DB_PATH: &str = "C:/ProgramData/otzaria/books/seforim.db";
@@ -623,7 +623,8 @@ fn tantivy_index_path(db_path: &str) -> std::path::PathBuf {
 /// בונה schema של Tantivy עם שדות: line_id (FAST+STORED), he_ref (TEXT+STORED)
 fn build_schema() -> (Schema, tantivy::schema::Field, tantivy::schema::Field) {
     let mut builder = Schema::builder();
-    let line_id = builder.add_u64_field("line_id", FAST | STORED);
+    let id_opts = NumericOptions::default().set_fast().set_stored();
+    let line_id = builder.add_u64_field("line_id", id_opts);
     let he_ref  = builder.add_text_field("he_ref",  TEXT | STORED);
     (builder.build(), line_id, he_ref)
 }
@@ -714,9 +715,19 @@ pub struct TantivyHit {
     pub he_ref:  String,
 }
 
+/// מנקה תו מיוחד מ-Tantivy query string
+fn escape_tantivy(s: &str) -> String {
+    s.chars().flat_map(|c| {
+        if "+-&|!(){}[]^"~*?:\\/".contains(c) {
+            vec!['\\', c]
+        } else {
+            vec![c]
+        }
+    }).collect()
+}
+
 /// חיפוש מהיר ב-Tantivy index.
-/// מחזיר עד `limit` תוצאות התואמות ל-variant.
-/// strategy: exact → prefix → fuzzy (לפי הדגל)
+/// strategy: exact phrase → prefix → fuzzy
 pub fn tantivy_search(
     index: &Index,
     variant: &str,
@@ -726,30 +737,23 @@ pub fn tantivy_search(
     let (schema, fld_id, fld_ref) = build_schema();
     let reader = index.reader().map_err(|e| e.to_string())?;
     let searcher = reader.searcher();
-
-    // בנה query: exact phrase → prefix → fuzzy
-    let query_str = if fuzzy {
-        format!("{}~1", tantivy::query::escape(variant))
-    } else {
-        format!("\"{}\"", tantivy::query::escape(variant))
-    };
+    let escaped = escape_tantivy(variant);
 
     let mut qp = QueryParser::for_index(index, vec![fld_ref]);
-    qp.set_field_boost(fld_ref, 2.0);
 
-    // נסה exact phrase query תחילה
-    let exact_q_str = format!("he_ref:\"{}\"", tantivy::query::escape(variant));
-    let prefix_q_str = format!("he_ref:{}*", tantivy::query::escape(variant));
-    let fuzzy_q_str  = format!("he_ref:{}~1", tantivy::query::escape(variant));
+    // exact phrase → prefix → fuzzy
+    let exact_q_str   = format!("he_ref:"{}"", escaped);
+    let prefix_q_str  = format!("he_ref:{}*",    escaped);
+    let fuzzy_q_str   = format!("he_ref:{}~1",   escaped);
 
-    let queries = if fuzzy {
-        vec![&exact_q_str, &prefix_q_str, &fuzzy_q_str]
+    let q_strs: Vec<&str> = if fuzzy {
+        vec![exact_q_str.as_str(), prefix_q_str.as_str(), fuzzy_q_str.as_str()]
     } else {
-        vec![&exact_q_str, &prefix_q_str]
+        vec![exact_q_str.as_str(), prefix_q_str.as_str()]
     };
 
     let mut hits: Vec<TantivyHit> = Vec::new();
-    for q_str in queries {
+    for q_str in &q_strs {
         if let Ok(q) = qp.parse_query(q_str) {
             if let Ok(top) = searcher.search(&q, &TopDocs::with_limit(limit)) {
                 for (_score, addr) in top {
@@ -764,7 +768,7 @@ pub fn tantivy_search(
                         hits.push(TantivyHit { line_id: id, he_ref: href });
                     }
                 }
-                if !hits.is_empty() { break; } // exact מצא — לא צריך prefix/fuzzy
+                if !hits.is_empty() { break; }
             }
         }
     }
