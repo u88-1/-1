@@ -1908,50 +1908,34 @@ fn check_ref_index(db_path: String) -> bool {
 /// book_title — שם הספר בדיוק כפי שמופיע בטור `title` של טבלת `book` ב-DB
 /// line_index — מספר השורה שאוצריא תגלול אליה
 #[tauri::command]
-fn open_in_otzaria(book_title: String, line_index: i64) -> Result<(), String> {
-    // ── מציאת נתיב tabs.json של אוצריא ────────────────────────────────────
-    let appdata = std::env::var("APPDATA")
-        .map_err(|_| "לא נמצא APPDATA".to_string())?;
-    let tabs_path = std::path::PathBuf::from(&appdata)
-        .join("com.otzaria.otzaria")
-        .join("tabs.json");
+fn open_in_otzaria(book_title: String, line_index: i64, db_path: Option<String>) -> Result<(), String> {
+    // שלב 1: מצא את book_id מה-DB לפי שם הספר
+    let db = db_path.unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+    let book_id: Option<i64> = Connection::open_with_flags(
+        &db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ).ok().and_then(|conn| {
+        // נסה שם עמודה title ואחר כך name
+        let sql = "SELECT id FROM book WHERE title = ?1 OR name = ?1 LIMIT 1";
+        conn.query_row(sql, rusqlite::params![&book_title], |r| r.get(0)).ok()
+    });
 
-    // ── בניית מבנה ה-tab שאוצריא מצפה לו (לפי text_tab.dart) ──────────────
-    let tab = serde_json::json!([{
-        "type": "TextBookTab",
-        "title": book_title,
-        "initalIndex": line_index,
-        "commentators": [],
-        "splitedView": true
-    }]);
+    // שלב 2: בנה deep link
+    // פורמט: otzaria://open/book/{id}?index={line_index}
+    //         otzaria://open/book/{title}?index={line_index}  (fallback ללא id)
+    let url = match book_id {
+        Some(id) => format!("otzaria://open/book/{}?index={}", id, line_index),
+        None     => format!("otzaria://open/book/{}?index={}", 
+                            urlencode(&book_title), line_index),
+    };
 
-    // ── כתיבת tabs.json ────────────────────────────────────────────────────
-    if let Some(parent) = tabs_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&tabs_path, tab.to_string()).map_err(|e| e.to_string())?;
+    // שלב 3: פתח את ה-deep link — Windows יטפל בו ויפעיל אוצריא
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &url])
+        .spawn()
+        .map_err(|e| format!("שגיאה בפתיחת אוצריא: {e}"))?;
 
-    // ── פתיחת אוצריא (מוצאים את ה-exe בנתיב ברירת המחדל) ─────────────────
-    // אם אוצריא כבר פועלת, Windows יביא את החלון לפרונט אוטומטית (single-instance).
-    let otzaria_paths = [
-        format!("{}\\..\\otzaria\\otzaria.exe", appdata),
-        "C:\\Program Files\\otzaria\\otzaria.exe".to_string(),
-        "C:\\Program Files (x86)\\otzaria\\otzaria.exe".to_string(),
-        format!("{}\\..\\Local\\Programs\\otzaria\\otzaria.exe", appdata),
-    ];
-
-    for path in &otzaria_paths {
-        let p = std::path::Path::new(path);
-        if p.exists() {
-            std::process::Command::new(p)
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-    }
-
-    // אם לא נמצא — tabs.json כבר נכתב, אוצריא תפתח ישירות על הספר כשהמשתמש יפעיל אותה
-    Err("אוצריא לא נמצאה — הספר יפתח בהפעלה הבאה של אוצריא".to_string())
+    Ok(())
 }
 
 // ════════════════════════════════════════════════════════════════════════════
