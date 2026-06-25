@@ -1372,3 +1372,34 @@ mark.hl {
     background: rgba(248,113,113,0.25);
 }
 
+
+/* ── Tantivy index build button + status ── */
+.build-index-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 6px;
+    padding: 4px 10px;
+    background: rgba(80,120,200,0.13);
+    border: 1px solid rgba(80,120,200,0.35);
+    color: #7aadff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background var(--ease);
+    white-space: nowrap;
+}
+.build-index-btn:hover { background: rgba(80,120,200,0.25); }
+.build-index-btn:disabled { opacity: 0.55; cursor: default; }
+
+.index-status {
+    margin-top: 5px;
+    font-size: 0.78rem;
+    padding: 3px 8px;
+    border-radius: 8px;
+}
+.index-ok       { color: #4caf78; background: rgba(76,175,120,0.1); }
+.index-missing  { color: #e6a817; background: rgba(230,168,23,0.1); }
+.index-building { color: #7aadff; background: rgba(80,120,200,0.1); }
+.index-error    { color: #e06060; background: rgba(220,80,80,0.1); }
