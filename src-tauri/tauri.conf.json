@@ -35,17 +35,33 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "category": "Productivity",
     "shortDescription": "בודק מקורות",
     "longDescription": "בדיקת הפניות אוטומטית בספרות תורנית מול מסד הנתונים של אוצריא ו-Sefaria",
     "copyright": "GPL-3.0",
     "windows": {
       "nsis": {
-        "languages": ["Hebrew", "English"],
-        "displayLanguageSelector": false
+        "languages": [
+          "Hebrew",
+          "English"
+        ],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": null,
+        "sidebarImage": null,
+        "installMode": "perMachine",
+        "shortcuts": true,
+        "createDesktopShortcut": true,
+        "createStartMenuShortcut": true,
+        "startMenuFolder": "בודק מקורות"
       }
-    }
+    },
+    "publisher": "u88-1"
   }
 }
