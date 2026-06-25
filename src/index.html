@@ -67,7 +67,9 @@
                         <div class="field-wrap">
                             <input id="dbPath" type="text" class="field-input" placeholder="C:\ProgramData\otzaria\books\seforim.db" />
                             <button class="browse-btn" data-action="browse" data-type="db" title="בחר מסד נתונים">📂</button>
+                            <button class="build-index-btn" id="buildIndexBtn" title="בנה אינדקס חיפוש מהיר (פעולה חד-פעמית)">⚡ בנה אינדקס</button>
                         </div>
+                        <div id="indexStatus" class="index-status" style="display:none"></div>
                     </div>
                 </div>
                 <div class="bracket-row">
@@ -182,3 +184,4 @@
 <script src="main.js"></script>
 </body>
 </html>
+
