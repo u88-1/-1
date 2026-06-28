@@ -1403,3 +1403,243 @@ mark.hl {
 .index-missing  { color: #e6a817; background: rgba(230,168,23,0.1); }
 .index-building { color: #7aadff; background: rgba(80,120,200,0.1); }
 .index-error    { color: #e06060; background: rgba(220,80,80,0.1); }
+
+/* ══════════════════════════════════════════════════════════
+   v4.2 — תוספות סגנון
+   ══════════════════════════════════════════════════════════ */
+
+/* ── CSS variable גודל כתב (נשלט מ-JS) ── */
+:root {
+    --result-font-size: 100%;
+}
+
+/* ── כותרת ממורכזת ── */
+.centered-header {
+    text-align: center;
+    justify-content: center;
+}
+.centered-header > div:first-child {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* ── מצב יום (light mode) ── */
+body.light-mode {
+    --parch-dark:  #f0ebe0;
+    --parch-mid:   #e8e3d8;
+    --panel-bg:    rgba(255,252,248,0.98);
+    --ink:         #1a1208;
+    --text:        #1a1208;
+    --text-2:      #4a3820;
+    --text-3:      #9a8870;
+    --border:      rgba(180,145,60,0.3);
+    --border2:     rgba(180,145,60,0.5);
+    background: #e8e3d8;
+}
+body.light-mode::before { filter: brightness(1.2); }
+body.light-mode .sidebar { background: rgba(255,252,248,0.99); }
+body.light-mode .ccard { background: #fffdf8; }
+body.light-mode .db-content { color: #1a1208; }
+
+/* ── גודל כתב בתוצאות ── */
+.db-content {
+    font-size: var(--result-font-size);
+}
+.ccard-sentence {
+    font-size: calc(var(--result-font-size) * 0.93);
+}
+
+/* ── שדה גודל כתב בהגדרות ── */
+.font-size-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.font-size-btn {
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--parch-mid);
+    color: var(--gold);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background var(--ease);
+}
+.font-size-btn:hover { background: var(--gold-dim); }
+#fontSizeVal {
+    font-weight: 600;
+    color: var(--text-2);
+    min-width: 3em;
+    text-align: center;
+}
+.page-size-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ── חלונית אימות טקסט מהיר ── */
+.paste-textarea {
+    width: 100%;
+    min-height: 120px;
+    max-height: 300px;
+    resize: vertical;
+    padding: 10px 14px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--parch-mid);
+    color: var(--text);
+    font-family: 'Frank Ruhl Libre', serif;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    direction: rtl;
+    transition: border var(--ease);
+}
+.paste-textarea:focus {
+    outline: none;
+    border-color: var(--gold);
+}
+.paste-toggle-hint {
+    font-size: 0.78rem;
+    color: var(--text-3);
+    margin-right: 8px;
+}
+
+/* ── חיפוש בתוכן התוצאות ── */
+.content-search-input {
+    border-color: rgba(100,180,100,0.4);
+}
+.content-search-input:focus {
+    border-color: rgba(100,180,100,0.8);
+    outline: none;
+}
+/* מרקר ירוק לchighlight תוכן */
+mark.content-hl {
+    background: rgba(80,200,120,0.35);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+/* ── מרקר צהוב על הציטוט מהמקור ── */
+mark.phrase-hl {
+    background: rgba(255,230,0,0.45);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+/* מרקר focus-mark לשורה הממוקדת בדף ── */
+mark.focus-mark {
+    background: rgba(255,220,0,0.4);
+    color: inherit;
+    font-weight: 700;
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+/* ── תוצאות נוספות (extra results) ── */
+.extra-results-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--gold-dim);
+    color: var(--gold);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--ease);
+}
+.extra-results-btn:hover {
+    background: rgba(201,168,76,0.22);
+}
+.db-match-extra {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+}
+
+/* ── כפתור הצג דף מלא ── */
+.expand-full-btn {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-2);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all var(--ease);
+}
+.expand-full-btn:hover { background: var(--gold-dim); color: var(--gold); }
+
+/* ── Pagination ── */
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 18px 0;
+    flex-wrap: wrap;
+}
+.pager-btn {
+    min-width: 36px;
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--parch-mid);
+    color: var(--text-2);
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--ease);
+}
+.pager-btn:hover:not(:disabled) { background: var(--gold-dim); border-color: var(--gold-border); color: var(--gold); }
+.pager-btn:disabled { opacity: 0.4; cursor: default; }
+.pager-btn.pager-active { background: var(--gold-dim); border-color: var(--gold-border); color: var(--gold); font-weight: 800; }
+.pager-ellipsis { color: var(--text-3); padding: 0 4px; }
+.pager-info { color: var(--text-3); font-size: 0.78rem; margin-right: 8px; }
+
+/* ── Changelog (אודות) ── */
+.changelog-section {
+    width: 100%;
+    margin: 20px 0 10px;
+    text-align: right;
+}
+.changelog-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--gold);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+.changelog-item {
+    margin-bottom: 14px;
+}
+.changelog-ver {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-2);
+    margin-bottom: 4px;
+}
+.changelog-item ul {
+    list-style: none;
+    padding-right: 10px;
+}
+.changelog-item ul li::before {
+    content: '• ';
+    color: var(--gold);
+}
+.changelog-item ul li {
+    font-size: 0.82rem;
+    color: var(--text-2);
+    line-height: 1.8;
+}
