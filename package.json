@@ -1,16 +1,1 @@
-{
-  "name": "bodek-mekorot",
-  "productName": "בודק מקורות",
-  "version": "4.1.0",
-  "description": "בודק מקורות — אפליקציית דסקטופ (Tauri) לבדיקת הפניות אוטומטית בספרות תורנית מול מסד הנתונים של אוצריא ו-Sefaria",
-  "license": "GPL-3.0",
-  "type": "module",
-  "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2"
-  }
-}
+{"name":"bodek-mekorot","productName":"בודק מקורות","version":"4.2.0","description":"בודק מקורות — אפליקציית דסקטופ (Tauri) לבדיקת הפניות אוטומטית בספרות תורנית מול מסד הנתונים של אוצריא ו-Sefaria","license":"GPL-3.0","type":"module","scripts":{"tauri":"tauri","dev":"tauri dev","build":"tauri build"},"devDependencies":{"@tauri-apps/cli":"^2"}}
