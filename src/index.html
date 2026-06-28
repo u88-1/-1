@@ -33,13 +33,13 @@
                 הגדרות
             </a>
         </nav>
-        <div class="sidebar-bottom">v4.1 · Tauri</div>
+        <div class="sidebar-bottom">v4.2 · avraham12200540 · Tauri</div>
     </aside>
 
     <main class="main">
         <!-- ══ PAGE: השוואת מקורות ══ -->
         <div id="page-compare" class="page">
-            <header class="page-header">
+            <header class="page-header centered-header">
                 <div>
                     <div class="header-ornament">✦ ✡ ✦</div>
                     <h1 class="page-title">בודק <span>מקורות</span></h1>
@@ -86,6 +86,22 @@
                 </button>
             </section>
 
+            <!-- אימות טקסט קצר ללא קובץ -->
+            <section class="panel" id="pasteVerifyPanel">
+                <div class="panel-title" id="pasteVerifyToggle" style="cursor:pointer;user-select:none">
+                    <div class="panel-icon">📋</div>אימות טקסט מהיר
+                    <span class="paste-toggle-hint">לחץ להרחבה ▼</span>
+                </div>
+                <div id="pasteVerifyBody" style="display:none">
+                    <p class="field-hint" style="margin-bottom:8px">הדבק כאן טקסט עם הפניות לאימות מיידי — ללא קובץ מצורף</p>
+                    <textarea id="pasteTextArea" class="paste-textarea" placeholder="הדבק טקסט כאן...&#10;לדוגמה: כתב הרמב&quot;ם {שבת ז, א} שיש לשמור..."></textarea>
+                    <button class="run-btn" id="runPasteBtn" style="margin-top:8px">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                        בדוק טקסט מהדבקה
+                    </button>
+                </div>
+            </section>
+
             <div id="status" class="status-bar">מוכן.</div>
             <div id="summary" style="display:none"></div>
             <div id="resultArea"></div>
@@ -93,7 +109,7 @@
 
         <!-- ══ PAGE: היסטוריה ══ -->
         <div id="page-history" class="page" style="display:none">
-            <header class="page-header">
+            <header class="page-header centered-header">
                 <div><h1 class="page-title">היסטוריה</h1><p class="page-sub">הרצות קודמות שנשמרו במכשיר זה</p></div>
                 <button class="run-btn" id="clearHistoryBtn" style="background:rgba(248,113,113,0.15);color:var(--red);border:1px solid rgba(248,113,113,0.25);">🗑 נקה היסטוריה</button>
             </header>
@@ -102,16 +118,47 @@
 
         <!-- ══ PAGE: אודות ══ -->
         <div id="page-about" class="page" style="display:none">
-            <header class="page-header">
+            <header class="page-header centered-header">
                 <div><div class="header-ornament">✦ ✡ ✦</div><h1 class="page-title">אודות <span>בודק מקורות</span></h1><div class="gold-line"></div></div>
             </header>
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
                 <div class="about-title">בודק מקורות</div>
-                <div class="about-version">גרסה 4.1 · Tauri</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.2 · avraham12200540 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
+                    <p>פותח על ידי: <strong>avraham12200540</strong></p>
+                </div>
+                <!-- שינויי גרסאות -->
+                <div class="changelog-section">
+                    <div class="changelog-title">📋 שינויי גרסאות</div>
+                    <div class="changelog-list" id="changelogList">
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.2.0 — נוכחי</div>
+                            <ul>
+                                <li>הגדלה/הקטנה של גודל הכתב בתוצאות</li>
+                                <li>מצב יום ומצב לילה</li>
+                                <li>תיקון פתח באוצריא — מיקום מדויק</li>
+                                <li>מקורות נוספים מגיעים סגורים עם כפתור הרחב</li>
+                                <li>סימון תוצאות במרקר צהוב</li>
+                                <li>תצוגה מצומצמת לדפים גדולים (2 שורות + הרחב)</li>
+                                <li>חיפוש בתוצאות עצמן (חלונית צד)</li>
+                                <li>אימות טקסט מהיר (הדבקה ללא קובץ)</li>
+                                <li>הגדרת כמות תוצאות לעמוד (pagination)</li>
+                                <li>כיתוב מרוכז וסגירה מלאה של האפליקציה</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.0 — שחרור ראשון Tauri</div>
+                            <ul>
+                                <li>המרה מ-Electron ל-Tauri 2</li>
+                                <li>מנוע ליבה ב-Rust עם SQLite + FTS5</li>
+                                <li>אינדקס Tantivy לחיפוש מהיר</li>
+                                <li>גודל אפליקציה ~8MB (במקום 150MB)</li>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
                 <div class="about-features">
                     <div class="about-feature"><span class="about-feat-icon">📄</span><div><strong>תמיכה במגוון קבצים</strong><span>טקסט רגיל (.txt), Word (.docx) ו-PDF (חילוץ טקסט)</span></div></div>
@@ -132,7 +179,7 @@
 
         <!-- ══ PAGE: הגדרות ══ -->
         <div id="page-settings" class="page" style="display:none">
-            <header class="page-header">
+            <header class="page-header centered-header">
                 <div><h1 class="page-title">הגדרות</h1><p class="page-sub">התאמה אישית של החיפוש ומסד הנתונים</p></div>
             </header>
 
@@ -176,6 +223,39 @@
                 </div>
             </section>
 
+            <!-- הגדרת תצוגה -->
+            <section class="panel">
+                <div class="panel-head"><span class="panel-label">תצוגה ונגישות</span></div>
+                <div class="settings-options">
+                    <!-- מצב יום/לילה -->
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">☀️ מצב יום</span><span class="toggle-desc">עיצוב בהיר (ברירת מחדל: מצב לילה כהה)</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-light-mode" class="toggle-input" /><span class="toggle-slider"></span></div>
+                    </label>
+                    <!-- גודל כתב -->
+                    <div class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">🔤 גודל כתב בתוצאות</span><span class="toggle-desc">התאמת גודל הטקסט בכרטיסי התוצאות</span></div>
+                        <div class="font-size-ctrl">
+                            <button class="font-size-btn" id="fontSizeDown" title="הקטן">A−</button>
+                            <span id="fontSizeVal">100%</span>
+                            <button class="font-size-btn" id="fontSizeUp" title="הגדל">A+</button>
+                        </div>
+                    </div>
+                    <!-- תוצאות לעמוד -->
+                    <div class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">📄 תצוגת תוצאות</span><span class="toggle-desc">רציף (גלילה אינסופית) או עמודים</span></div>
+                        <div class="page-size-ctrl">
+                            <select id="opt-page-mode" class="field-input" style="width:auto;padding:4px 8px">
+                                <option value="continuous">רציף</option>
+                                <option value="10">10 לעמוד</option>
+                                <option value="20">20 לעמוד</option>
+                                <option value="50">50 לעמוד</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <button class="run-btn" id="saveSettingsBtn">💾 שמור הגדרות</button>
             <div id="settingsSaved" class="status-bar ok" style="display:none;margin-top:10px">ההגדרות נשמרו ✓</div>
         </div>
@@ -184,4 +264,3 @@
 <script src="main.js"></script>
 </body>
 </html>
-
