@@ -26,7 +26,6 @@ document.getElementById('buildIndexBtn')?.addEventListener('click', async () => 
     btn.disabled = true;
     btn.textContent = '⏳ בונה אינדקס...';
     if (statusEl) { statusEl.style.display = 'block'; statusEl.className = 'index-status index-building'; statusEl.textContent = 'בונה אינדקס — עשוי לקחת 1-3 דקות...'; }
-    // הקשב לאירועי התקדמות
     const unlisten = await window.__TAURI__?.event?.listen('index-progress', e => {
         if (statusEl) statusEl.textContent = e.payload;
         if (e.payload === 'הושלם') {
@@ -49,19 +48,18 @@ document.getElementById('buildIndexBtn')?.addEventListener('click', async () => 
     }
 });
 
-// בדוק סטטוס בהפעלה
 window.addEventListener('DOMContentLoaded', checkAndShowIndexStatus);
 document.getElementById('dbPath')?.addEventListener('change', checkAndShowIndexStatus);
 
 // ══════════════════════════════════════════════════════
-//  בודק מקורות  |  main.js  (Tauri)  v4.1
-//  תקשורת Frontend↔Backend: invoke + listen (לא fetch/SSE)
+//  בודק מקורות  |  main.js  (Tauri)  v4.2
+//  תקשורת Frontend↔Backend: invoke + listen
 // ══════════════════════════════════════════════════════
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// ── אחסון מקומי (הגדרות/היסטוריה/שדות אחרונים) ─────────
+// ── אחסון מקומי ──────────────────────────────────────
 function loadSettings(){try{return JSON.parse(localStorage.getItem('bm_settings')||'{}');}catch{return{};}}
 function saveSettings(o){localStorage.setItem('bm_settings',JSON.stringify(o));}
 let settings=loadSettings();
@@ -81,6 +79,44 @@ function addHistory(e){
     el.addEventListener('input',()=>localStorage.setItem('bm_'+id,el.value));
 });
 
+// ── מצב יום/לילה ─────────────────────────────────────
+function applyTheme(light){
+    document.body.classList.toggle('light-mode', !!light);
+    const el=document.getElementById('opt-light-mode');
+    if(el)el.checked=!!light;
+}
+applyTheme(settings.lightMode);
+
+// ── גודל כתב ─────────────────────────────────────────
+let resultFontSize = settings.resultFontSize || 100;
+function applyFontSize(size){
+    resultFontSize=Math.max(70,Math.min(160,size));
+    document.documentElement.style.setProperty('--result-font-size', resultFontSize+'%');
+    const el=document.getElementById('fontSizeVal');
+    if(el)el.textContent=resultFontSize+'%';
+}
+applyFontSize(resultFontSize);
+
+document.getElementById('fontSizeUp')?.addEventListener('click',()=>{applyFontSize(resultFontSize+10);});
+document.getElementById('fontSizeDown')?.addEventListener('click',()=>{applyFontSize(resultFontSize-10);});
+
+// ── pagination mode ───────────────────────────────────
+let pageMode = settings.pageMode || 'continuous'; // 'continuous' | '10' | '20' | '50'
+let currentPage = 0;
+
+function getPageSize(){ return pageMode === 'continuous' ? Infinity : parseInt(pageMode); }
+
+// ── toggle לאימות טקסט מהיר ──────────────────────────
+document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
+    const body=document.getElementById('pasteVerifyBody');
+    if(!body)return;
+    const open=body.style.display!=='none';
+    body.style.display=open?'none':'';
+    const hint=document.querySelector('.paste-toggle-hint');
+    if(hint)hint.textContent=open?'לחץ להרחבה ▼':'לחץ לסגירה ▲';
+});
+
+// ── הצגת דפים ─────────────────────────────────────────
 function showPage(name){
     ['compare','history','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
@@ -112,6 +148,8 @@ let sortedCache=[],renderedCount=100;
 let lastResults=null,filterQuery='',filterStatus='all',debounceTimer=null;
 let currentDbPath='',activeJobId=null,isRunning=false;
 let streamStats={total:0,processed:0,found:0,notFound:0};
+// חיפוש בתוצאות עצמן
+let contentSearchQuery='';
 
 const inputFileEl=document.getElementById('inputFile');
 const dbPathEl=document.getElementById('dbPath');
@@ -124,7 +162,7 @@ function getBracketValue(){
     return document.querySelector('input[name="brackets"]:checked')?.value||'curly';
 }
 
-// ── אירועים מ-Rust (נרשמים פעם אחת) ───────────────────
+// ── אירועים מ-Rust ────────────────────────────────────
 listen('compare-result',ev=>{
     const p=ev.payload;if(!p||p.jobId!==activeJobId)return;
     handleResultEvent(p);
@@ -140,6 +178,51 @@ runButton.addEventListener('click',()=>{
     startComparison();
 });
 
+// ── הרצה מטקסט מודבק ─────────────────────────────────
+document.getElementById('runPasteBtn')?.addEventListener('click',()=>{
+    const text=document.getElementById('pasteTextArea')?.value.trim();
+    if(!text){setStatus('אנא הדבק טקסט לפני הבדיקה.','error');return;}
+    startComparisonFromText(text);
+});
+
+function startComparisonFromText(text){
+    isRunning=true;
+    setStatus('מריץ השוואה על טקסט מודבק...','working');
+    summaryEl.style.display='none';
+    resultArea.innerHTML='';
+    document.getElementById('resultsToolbar')?.remove();
+    sortedCache=[];renderedCount=100;lastResults=null;
+    filterQuery='';filterStatus='all';contentSearchQuery='';
+    currentPage=0;
+    startTimer();
+
+    runButton.innerHTML=`<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><rect x="4" y="4" width="12" height="12" rx="2"/></svg> עצור`;
+    runButton.classList.add('stop-mode');
+
+    currentDbPath=dbPathEl.value.trim()||settings.defaultDb||'';
+    activeJobId=Date.now().toString()+'-'+Math.random().toString(36).slice(2,8);
+
+    const options={
+        hebNums:settings.hebNums!==false,abbrev:settings.abbrev!==false,
+        fuzzy:settings.fuzzy!==false,sefaria:settings.sefaria!==false,
+        brackets:getBracketValue(),
+    };
+
+    resultArea.innerHTML='<div class="compare-list" id="streamList"></div>';
+    streamStats={total:0,processed:0,found:0,notFound:0};
+
+    // שולח טקסט ישיר — Rust מקבל inputText במקום inputFile
+    invoke('compare_start',{
+        jobId:activeJobId,
+        inputFile:null,
+        inputText:text,
+        dbPath:currentDbPath||null,
+        options,
+    }).catch(err=>{
+        stopTimer();setStatus('שגיאה: '+(err?.toString()||err),'error');resetRunButton();isRunning=false;
+    });
+}
+
 function startComparison(){
     const filePath=inputFileEl.value.trim().replace(/^["']+|["']+$/g,'').trim();
     if(!filePath){setStatus('אנא הזן נתיב קובץ מלא.','error');return;}
@@ -150,7 +233,8 @@ function startComparison(){
     resultArea.innerHTML='';
     document.getElementById('resultsToolbar')?.remove();
     sortedCache=[];renderedCount=100;lastResults=null;
-    filterQuery='';filterStatus='all';
+    filterQuery='';filterStatus='all';contentSearchQuery='';
+    currentPage=0;
     startTimer();
 
     runButton.innerHTML=`<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><rect x="4" y="4" width="12" height="12" rx="2"/></svg> עצור`;
@@ -219,7 +303,6 @@ function onStreamComplete(summary){
     resetRunButton();
     document.getElementById('progressBar')?.remove();
     if(summary.error){setStatus('שגיאה: '+summary.error,'error');return;}
-    // צמצום ל-array צפוף (idx עוקבים) למקרה של חורים
     const dense=sortedCache.filter(x=>x);
     lastResults=summary;
     const aborted=summary.aborted;
@@ -253,6 +336,7 @@ function resetRunButton(){
 // ── Helpers ───────────────────────────────────────────
 function setStatus(msg,type){statusEl.textContent=msg;statusEl.className='status-bar'+(type?' '+type:'');}
 function esc(t){return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');}
+
 function highlightPhrase(content,phrase){
     if(!phrase||phrase.length<3)return esc(content);
     const words=phrase.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').split(/\s+/).filter(w=>w.length>2);
@@ -262,6 +346,11 @@ function highlightPhrase(content,phrase){
 function highlight(text,query){
     if(!query||query.length<2)return esc(text);
     return esc(text).replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<mark class="hl">$1</mark>');
+}
+function highlightContent(text,query){
+    // הדגשה בתוך תוכן המאגר (content search)
+    if(!query||query.length<2)return text;
+    return text.replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<mark class="content-hl">$1</mark>');
 }
 function markRefInSentence(sentence,ref){
     const escaped=ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -274,9 +363,11 @@ function badgeHtml(mt){
     return`<span class="badge ${cls[t]||'badge-missing'}">${labels[t]||t}</span>`;
 }
 
+// ── בניית כרטיס תוצאה ────────────────────────────────
 function buildCompareCard(item,idx){
     const badge=badgeHtml(item.matchType);
     const sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
+
     if(!item.rows?.length){
         return`<div class="ccard ccard-missing" id="card-${idx}">
             <div class="ccard-ref-row"><span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}</div>
@@ -287,13 +378,39 @@ function buildCompareCard(item,idx){
             </div>
         </div>`;
     }
+
+    // תוצאה ראשונה גלויה, שאר סגורות
     const dbBlocks=item.rows.map((row,ri)=>{
-        const contentHtml=highlightPhrase(row.content||'',item.quoteBefore);
+        const rawContent=row.content||'';
+        // הדגש phrase וגם content search
+        let contentHtml=highlightPhrase(rawContent,item.quoteBefore);
+        if(contentSearchQuery.length>=2){
+            contentHtml=highlightContent(contentHtml,contentSearchQuery);
+        }
+
+        // תוצאות נוספות (ri>0) — מגיעות סגורות
+        const isExtra=ri>0;
         const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
         const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 הרחב לדף מלא</button>`:'';
         const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" title="פתח את המקום הזה ישירות באוצריא">📚 פתח באוצריא</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
-        return`<div class="db-match${ri>0?' db-match-sep':''}">
+
+        if(isExtra){
+            return`<div class="db-match-extra" id="extra-${idx}-${ri}" style="display:none">
+                <div class="db-match-meta">
+                    <span class="book-name">${highlight(row.bookTitle,filterQuery)}</span>
+                    <span class="db-heref">📌 ${highlight(row.heRef,filterQuery)}</span>
+                    <span class="match-label match-${row.matchType||item.matchType}">${typeLabel}</span>
+                    ${sefariaLink}
+                </div>
+                <div class="db-content" dir="rtl">${contentHtml}</div>
+                ${expandBtn}
+                ${otzariaBtn}
+                <div class="page-expand-area" id="page-${idx}-${ri}" style="display:none"></div>
+            </div>`;
+        }
+
+        return`<div class="db-match">
             <div class="db-match-meta">
                 <span class="book-name">${highlight(row.bookTitle,filterQuery)}</span>
                 <span class="db-heref">📌 ${highlight(row.heRef,filterQuery)}</span>
@@ -303,9 +420,13 @@ function buildCompareCard(item,idx){
             <div class="db-content" dir="rtl">${contentHtml}</div>
             ${expandBtn}
             ${otzariaBtn}
-            <div class="page-expand-area" id="page-${idx}-${ri}" style="display:none"></div>
+            <div class="page-expand-area" id="page-${idx}-0" style="display:none"></div>
         </div>`;
     }).join('');
+
+    const extraCount=item.rows.length-1;
+    const extraBtn=extraCount>0?`<button class="extra-results-btn" data-action="toggle-extra" data-card-idx="${idx}" data-extra-count="${extraCount}">▶ הצג עוד ${extraCount} תוצאות</button>`:'';
+
     return`<div class="ccard" id="card-${idx}">
         <div class="ccard-ref-row">
             <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}
@@ -314,7 +435,7 @@ function buildCompareCard(item,idx){
         <div class="ccard-cols">
             <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
             <div class="ccard-divider"></div>
-            <div class="ccard-db"><div class="ccard-section-label">🗄 מהמאגר</div>${dbBlocks}</div>
+            <div class="ccard-db"><div class="ccard-section-label">🗄 מהמאגר</div>${dbBlocks}${extraBtn}</div>
         </div>
     </div>`;
 }
@@ -343,6 +464,7 @@ function renderToolbar(r){
     toolbar.innerHTML=`
         <div class="toolbar-right">
             <input id="filterInput" class="filter-input" type="text" placeholder="חפש הפניה, ספר..." />
+            <input id="contentSearchInput" class="filter-input content-search-input" type="text" placeholder="🔍 חפש בתוכן התוצאות..." title="חיפוש בתוכן עצמו (לא רק בשם ההפניה)" />
             <div class="filter-tabs">
                 <button class="filter-tab active" data-status="all">הכל <span class="tab-count">${r.results.length}</span></button>
                 <button class="filter-tab" data-status="found">נמצאו <span class="tab-count s-found">${r.foundCount}</span></button>
@@ -360,13 +482,18 @@ function renderToolbar(r){
         </div>`;
     document.getElementById('resultsToolbar')?.remove();
     resultArea.before(toolbar);
+
     document.getElementById('filterInput').addEventListener('input',e=>{
         clearTimeout(debounceTimer);
-        debounceTimer=setTimeout(()=>{filterQuery=e.target.value.trim();renderedCount=100;renderResults();},250);
+        debounceTimer=setTimeout(()=>{filterQuery=e.target.value.trim();currentPage=0;renderResults();},250);
+    });
+    document.getElementById('contentSearchInput').addEventListener('input',e=>{
+        clearTimeout(debounceTimer);
+        debounceTimer=setTimeout(()=>{contentSearchQuery=e.target.value.trim();currentPage=0;renderResults();},250);
     });
     toolbar.querySelectorAll('.filter-tab').forEach(btn=>btn.addEventListener('click',()=>{
         toolbar.querySelectorAll('.filter-tab').forEach(b=>b.classList.remove('active'));
-        btn.classList.add('active');filterStatus=btn.dataset.status;renderedCount=100;renderResults();
+        btn.classList.add('active');filterStatus=btn.dataset.status;currentPage=0;renderResults();
     }));
     document.getElementById('exportBtn').addEventListener('click',e=>{
         e.stopPropagation();
@@ -379,28 +506,74 @@ function renderToolbar(r){
 // ── Filter & Render ───────────────────────────────────
 function getFilteredResults(){
     if(!sortedCache)return[];
-    if(filterStatus==='all'&&filterQuery.length<1)return sortedCache;
     const q=filterQuery.toLowerCase();
+    const cq=contentSearchQuery.toLowerCase();
     return sortedCache.filter(item=>{
         const found=item.rows?.length>0;
         if(filterStatus==='found'&&!found)return false;
         if(filterStatus==='missing'&&found)return false;
-        if(!q)return true;
-        return item.ref.toLowerCase().includes(q)||
+        // סינון לפי שם הפניה/ספר
+        let passName=true;
+        if(q){
+            passName=item.ref.toLowerCase().includes(q)||
                item.sentence?.toLowerCase().includes(q)||
                item.rows?.some(r=>(r.bookTitle||'').toLowerCase().includes(q)||(r.heRef||'').toLowerCase().includes(q));
+        }
+        // סינון לפי תוכן (content search)
+        let passContent=true;
+        if(cq){
+            passContent=item.rows?.some(r=>(r.content||'').toLowerCase().includes(cq))||
+                        item.sentence?.toLowerCase().includes(cq)||
+                        item.ref.toLowerCase().includes(cq);
+        }
+        return passName&&passContent;
     });
 }
+
 function renderResults(){
     if(!sortedCache?.length){resultArea.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><div>לא נמצאו הפניות.</div></div>`;return;}
     const filtered=getFilteredResults();
     if(!filtered.length){resultArea.innerHTML=`<div class="empty-state"><div class="empty-icon">🔎</div><div>אין תוצאות.</div></div>`;return;}
-    const chunk=filtered.slice(0,renderedCount);
-    const hasMore=filtered.length>renderedCount;
-    const cards=chunk.map((item,idx)=>buildCompareCard(item,idx)).join('');
-    const moreBtn=hasMore?`<div class="load-more-wrap"><button class="expand-btn" data-action="load-more">▼ הצג עוד (${filtered.length-chunk.length} נוספות)</button></div>`:'';
-    resultArea.innerHTML=`<div class="compare-list">${cards}${moreBtn}</div>`;
+
+    const ps=getPageSize();
+    if(ps===Infinity){
+        // רציף
+        const chunk=filtered.slice(0,renderedCount);
+        const hasMore=filtered.length>renderedCount;
+        const cards=chunk.map((item,idx)=>buildCompareCard(item,idx)).join('');
+        const moreBtn=hasMore?`<div class="load-more-wrap"><button class="expand-btn" data-action="load-more">▼ הצג עוד (${filtered.length-chunk.length} נוספות)</button></div>`:'';
+        resultArea.innerHTML=`<div class="compare-list">${cards}${moreBtn}</div>`;
+    } else {
+        // pagination
+        const totalPages=Math.ceil(filtered.length/ps);
+        const safePage=Math.min(currentPage,totalPages-1);
+        const start=safePage*ps;
+        const chunk=filtered.slice(start,start+ps);
+        const cards=chunk.map((item,idx)=>buildCompareCard(item,start+idx)).join('');
+        const pagerHtml=buildPager(safePage,totalPages,filtered.length);
+        resultArea.innerHTML=`<div class="compare-list">${cards}</div>${pagerHtml}`;
+        resultArea.scrollIntoView({behavior:'smooth',block:'start'});
+    }
 }
+
+function buildPager(page,total,count){
+    if(total<=1)return'';
+    let btns='';
+    btns+=`<button class="pager-btn${page===0?' pager-active':''}" data-action="go-page" data-page="0">1</button>`;
+    if(page>2)btns+=`<span class="pager-ellipsis">…</span>`;
+    for(let i=Math.max(1,page-1);i<=Math.min(total-2,page+1);i++){
+        btns+=`<button class="pager-btn${i===page?' pager-active':''}" data-action="go-page" data-page="${i}">${i+1}</button>`;
+    }
+    if(page<total-3)btns+=`<span class="pager-ellipsis">…</span>`;
+    if(total>1)btns+=`<button class="pager-btn${page===total-1?' pager-active':''}" data-action="go-page" data-page="${total-1}">${total}</button>`;
+    return`<div class="pager">
+        <button class="pager-btn" data-action="go-page" data-page="${Math.max(0,page-1)}" ${page===0?'disabled':''}>‹ הקודם</button>
+        ${btns}
+        <button class="pager-btn" data-action="go-page" data-page="${Math.min(total-1,page+1)}" ${page===total-1?'disabled':''}>הבא ›</button>
+        <span class="pager-info">${count} תוצאות</span>
+    </div>`;
+}
+
 function loadMore(){renderedCount+=100;renderResults();}
 
 // ── Talmud page expand ────────────────────────────────
@@ -411,15 +584,28 @@ async function expandTalmudPage(lineId,heRef,btn){
     try{
         const lines=await invoke('expand_page',{lineId,dbPath:currentDbPath||null});
         if(!lines?.length)throw new Error('לא נמצא');
-        const linesHtml=lines.map(l=>`<div class="page-line${l.isFocus?' page-line-focus':''}">
+
+        // מציג רק 2 שורות סביב ה-focus, עם אפשרות לפתוח הכל
+        const focusIdx=lines.findIndex(l=>l.isFocus);
+        const previewStart=Math.max(0,focusIdx-1);
+        const previewLines=lines.slice(previewStart,previewStart+3);
+
+        const makeLineHtml=(l)=>`<div class="page-line${l.isFocus?' page-line-focus':''}">
             <span class="page-line-ref">${esc(l.heRef||'')}</span>
-            <span class="page-line-content">${l.isFocus?`<strong>${esc(l.content)}</strong>`:esc(l.content)}</span>
-        </div>`).join('');
+            <span class="page-line-content">${l.isFocus?`<mark class="focus-mark">${esc(l.content)}</mark>`:esc(l.content)}</span>
+        </div>`;
+
+        const previewHtml=previewLines.map(makeLineHtml).join('');
+        const fullHtml=lines.map(makeLineHtml).join('');
+        const hiddenFull=lines.length>3;
+
         area.innerHTML=`<div class="page-expand">
             <div class="page-expand-header"><span>📖 ${esc(heRef)}</span>
                 <button class="page-expand-close" data-action="close-page-expand">✕</button>
             </div>
-            <div class="page-lines" dir="rtl">${linesHtml}</div>
+            <div class="page-lines" dir="rtl" id="page-preview-${lineId}">${previewHtml}</div>
+            ${hiddenFull?`<div class="page-lines page-lines-full" dir="rtl" id="page-full-${lineId}" style="display:none">${fullHtml}</div>
+            <button class="expand-full-btn" data-action="toggle-full-page" data-line-id="${lineId}">▼ הצג דף מלא (${lines.length} שורות)</button>`:''}
         </div>`;
         area.style.display='';
         area.scrollIntoView({behavior:'smooth',block:'nearest'});
@@ -430,7 +616,7 @@ async function expandTalmudPage(lineId,heRef,btn){
     }finally{btn.disabled=false;}
 }
 
-// ── Browse file (דיאלוג native של Tauri) ───────────────
+// ── Browse file ───────────────────────────────────────
 async function browseFile(type){
     try{
         const filter=(type==='db'||type==='db-settings')?'db':'txt';
@@ -516,29 +702,68 @@ function loadSettingsUI(){
     const dbEl=document.getElementById('settingsDbPath');if(dbEl)dbEl.value=s.defaultDb||'';
     const opts={'opt-hebnums':'hebNums','opt-abbrev':'abbrev','opt-fuzzy':'fuzzy','opt-sefaria':'sefaria','opt-history':'saveHistory'};
     Object.entries(opts).forEach(([id,key])=>{const el=document.getElementById(id);if(el)el.checked=s[key]!==false;});
+    // light mode
+    const lm=document.getElementById('opt-light-mode');if(lm)lm.checked=!!s.lightMode;
+    // font size
+    applyFontSize(s.resultFontSize||100);
+    // page mode
+    const pm=document.getElementById('opt-page-mode');if(pm)pm.value=s.pageMode||'continuous';
 }
+
 document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>{
     const dbEl=document.getElementById('settingsDbPath');
     const opts={'opt-hebnums':'hebNums','opt-abbrev':'abbrev','opt-fuzzy':'fuzzy','opt-sefaria':'sefaria','opt-history':'saveHistory'};
     const ns={defaultDb:dbEl?.value.trim()||''};
     Object.entries(opts).forEach(([id,key])=>{const el=document.getElementById(id);ns[key]=el?el.checked:true;});
+    // light mode
+    const lm=document.getElementById('opt-light-mode');
+    ns.lightMode=lm?lm.checked:false;
+    applyTheme(ns.lightMode);
+    // font size
+    ns.resultFontSize=resultFontSize;
+    // page mode
+    const pm=document.getElementById('opt-page-mode');
+    ns.pageMode=pm?pm.value:'continuous';
+    pageMode=ns.pageMode;
+
     saveSettings(ns);settings=ns;
     const saved=document.getElementById('settingsSaved');
     if(saved){saved.style.display='flex';setTimeout(()=>saved.style.display='none',2500);}
 });
 
-// ── האזנה גלובלית מואצלת (delegation) לכל הפעולות שהיו onclick מוטבע ──
-// מאפשרת CSP מחמיר (script-src ללא 'unsafe-inline') כי אין יותר קוד JS
-// בתוך תכונות HTML; כל הלחיצות על אלמנטים עם data-action מנותבות מכאן,
-// כולל אלמנטים שנוצרים דינמית (כרטיסי השוואה, היסטוריה, תפריט ייצוא וכו').
+// ── האזנה גלובלית מואצלת (delegation) ───────────────
 document.addEventListener('click',(e)=>{
     const el=e.target.closest('[data-action]');
     if(!el)return;
     const action=el.dataset.action;
+
     if(action==='browse'){
         browseFile(el.dataset.type);
+
     }else if(action==='expand-page'){
         expandTalmudPage(Number(el.dataset.lineId),el.dataset.heRef,el);
+
+    }else if(action==='toggle-full-page'){
+        const lid=el.dataset.lineId;
+        const preview=document.getElementById('page-preview-'+lid);
+        const full=document.getElementById('page-full-'+lid);
+        if(!full)return;
+        const open=full.style.display!=='none';
+        if(preview)preview.style.display=open?'':'none';
+        full.style.display=open?'none':'';
+        el.textContent=open?`▼ הצג דף מלא`:`▲ סגור דף מלא`;
+
+    }else if(action==='toggle-extra'){
+        const cardIdx=el.dataset.cardIdx;
+        const count=parseInt(el.dataset.extraCount);
+        const open=el.dataset.open==='1';
+        for(let i=1;i<=count;i++){
+            const extraEl=document.getElementById(`extra-${cardIdx}-${i}`);
+            if(extraEl)extraEl.style.display=open?'none':'';
+        }
+        el.dataset.open=open?'0':'1';
+        el.textContent=open?`▶ הצג עוד ${count} תוצאות`:`▲ הסתר תוצאות נוספות`;
+
     }else if(action==='open-in-otzaria'){
         const btn=el;
         const orig=btn.textContent;
@@ -556,19 +781,26 @@ document.addEventListener('click',(e)=>{
             btn.disabled=false;
             alert('שגיאה בפתיחת אוצריא:\n'+err);
         });
+
     }else if(action==='close-page-expand'){
         const area=el.closest('.page-expand-area');
         if(area)area.style.display='none';
-        const expandBtn=el.closest('.db-match')?.querySelector('.expand-page-btn');
+        const expandBtn=el.closest('.db-match,.db-match-extra')?.querySelector('.expand-page-btn');
         if(expandBtn)expandBtn.textContent='📖 הרחב לדף מלא';
+
     }else if(action==='export'){
         exportData(el.dataset.format);
+
     }else if(action==='load-more'){
         loadMore();
+
+    }else if(action==='go-page'){
+        currentPage=parseInt(el.dataset.page);
+        renderResults();
+
     }else if(action==='load-history'){
         loadFromHistory(Number(el.dataset.index));
     }
 });
 
 loadSettingsUI();
-
