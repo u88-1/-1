@@ -1525,7 +1525,8 @@ fn compare_start(
     db: State<'_, DbState>,
     jobs: State<'_, Jobs>,
     job_id: String,
-    input_file: String,
+    input_file: Option<String>,
+    input_text: Option<String>,
     db_path: Option<String>,
     options: Options,
 ) -> Result<(), String> {
@@ -1543,17 +1544,34 @@ fn compare_start(
             jobs_arc.lock().unwrap().remove(&job_id);
         };
 
-        let input = input_file.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
         let resolved_db = db_path
             .as_deref()
             .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
             .filter(|p| !p.is_empty())
             .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
 
-        if !Path::new(&input).exists() {
-            emit_done(&app, &job_id, err_summary(format!("קובץ לא נמצא: {input}")));
-            cleanup(&jobs_arc);
-            return;
+        // תמיכה בטקסט מודבק (input_text) במקום קובץ (input_file)
+        let raw_text: Option<String> = if let Some(txt) = input_text {
+            if !txt.trim().is_empty() { Some(txt) } else { None }
+        } else { None };
+
+        let input = input_file
+            .as_deref()
+            .map(|s| s.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+            .unwrap_or_default();
+
+        // אם אין טקסט מודבק — חייב קובץ
+        if raw_text.is_none() {
+            if input.is_empty() {
+                emit_done(&app, &job_id, err_summary("לא סופק קובץ או טקסט לבדיקה".to_string()));
+                cleanup(&jobs_arc);
+                return;
+            }
+            if !Path::new(&input).exists() {
+                emit_done(&app, &job_id, err_summary(format!("קובץ לא נמצא: {input}")));
+                cleanup(&jobs_arc);
+                return;
+            }
         }
         if !Path::new(&resolved_db).exists() {
             emit_done(&app, &job_id, err_summary(format!("מסד הנתונים לא נמצא: {resolved_db}")));
@@ -1561,19 +1579,23 @@ fn compare_start(
             return;
         }
 
-        // חילוץ טקסט (blocking)
-        let input_for_extract = input.clone();
-        let text = match tokio::task::spawn_blocking(move || extract_text(&input_for_extract)).await {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                emit_done(&app, &job_id, err_summary(format!("שגיאה בקריאת הקובץ: {e}")));
-                cleanup(&jobs_arc);
-                return;
-            }
-            Err(e) => {
-                emit_done(&app, &job_id, err_summary(format!("שגיאה פנימית: {e}")));
-                cleanup(&jobs_arc);
-                return;
+        // חילוץ טקסט — מטקסט מודבק או מקובץ
+        let text = if let Some(pasted) = raw_text {
+            pasted
+        } else {
+            let input_for_extract = input.clone();
+            match tokio::task::spawn_blocking(move || extract_text(&input_for_extract)).await {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => {
+                    emit_done(&app, &job_id, err_summary(format!("שגיאה בקריאת הקובץ: {e}")));
+                    cleanup(&jobs_arc);
+                    return;
+                }
+                Err(e) => {
+                    emit_done(&app, &job_id, err_summary(format!("שגיאה פנימית: {e}")));
+                    cleanup(&jobs_arc);
+                    return;
+                }
             }
         };
 
@@ -2020,13 +2042,12 @@ fn main() {
             }
             tray.build(app)?;
 
-            // סגירת חלון → הסתרה לטריי (לא יציאה)
+            // סגירת חלון → יציאה מלאה מהאפליקציה (ללא הסתרה לטריי)
             if let Some(win) = app.get_webview_window("main") {
-                let win2 = win.clone();
+                let app_handle = app.handle().clone();
                 win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = win2.hide();
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        app_handle.exit(0);
                     }
                 });
             }
