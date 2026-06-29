@@ -358,8 +358,8 @@ fn generate_variants(reference: &str) -> Vec<String> {
 
     // "פרשה X, סימן Y" עם פסיק (נפוץ בכתיבה ידנית)
     if let Some(caps) = RE_SIMAN_COMMA.captures(&base) {
-        let parasha = caps.get(1).map(|m| m.as_str().trim_matches(|c| c == ''' || c == '׳')).unwrap_or("");
-        let siman   = caps.get(2).map(|m| m.as_str().trim_matches(|c| c == ''' || c == '׳')).unwrap_or("");
+        let parasha = caps.get(1).map(|m| m.as_str().trim_matches(|c| c == '\'' || c == '׳')).unwrap_or("");
+        let siman   = caps.get(2).map(|m| m.as_str().trim_matches(|c| c == '\'' || c == '׳')).unwrap_or("");
         let before  = &base[..caps.get(0).unwrap().start()].trim_end();
         push(format!("{} {}, {}", before, parasha, siman), &mut order, &mut seen);
         push(format!("{} {}:{}", before, parasha, siman), &mut order, &mut seen);
