@@ -1,3 +1,6 @@
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
 // ── Tantivy index check + build ──────────────────────────────────────────
 async function checkAndShowIndexStatus() {
     const dbPath = document.getElementById('dbPath').value.trim();
@@ -51,15 +54,6 @@ document.getElementById('buildIndexBtn')?.addEventListener('click', async () => 
 window.addEventListener('DOMContentLoaded', checkAndShowIndexStatus);
 document.getElementById('dbPath')?.addEventListener('change', checkAndShowIndexStatus);
 
-// ══════════════════════════════════════════════════════
-//  בודק מקורות  |  main.js  (Tauri)  v4.1.6
-//  תקשורת Frontend↔Backend: invoke + listen
-// ══════════════════════════════════════════════════════
-
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-
-// ── אחסון מקומי ──────────────────────────────────────
 function loadSettings(){try{return JSON.parse(localStorage.getItem('bm_settings')||'{}');}catch{return{};}}
 function saveSettings(o){localStorage.setItem('bm_settings',JSON.stringify(o));}
 let settings=loadSettings();
