@@ -48,12 +48,11 @@
     "windows": {
       "nsis": {
         "languages": [
-          "Hebrew",
           "English"
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "installMode": "currentUser"
+        "installMode": "perMachine"
       }
     },
     "publisher": "U88-1"
