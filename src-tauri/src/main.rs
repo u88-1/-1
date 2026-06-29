@@ -1975,11 +1975,17 @@ fn open_in_otzaria(book_title: String, line_index: i64, db_path: Option<String>)
                             urlencode(&book_title), line_index),
     };
 
-    // שלב 3: פתח את ה-deep link — Windows יטפל בו ויפעיל אוצריא
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "", &url])
-        .spawn()
-        .map_err(|e| format!("שגיאה בפתיחת אוצריא: {e}"))?;
+    // שלב 3: פתח את ה-deep link — ללא חלון CMD גלוי
+    // CREATE_NO_WINDOW (0x08000000) מונע את פתיחת חלון שורת הפקודה
+    {
+        #[cfg(target_os = "windows")]
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/c", "start", "", &url]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.spawn().map_err(|e| format!("שגיאה בפתיחת אוצריא: {e}"))?;
+    }
 
     Ok(())
 }
