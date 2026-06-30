@@ -386,7 +386,7 @@ function buildCompareCard(item,idx){
         const isExtra=ri>0;
         const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
         const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 הרחב לדף מלא</button>`:'';
-        const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" title="פתח את המקום הזה ישירות באוצריא">📚 פתח באוצריא</button>`:'';
+        const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" data-book-id="${row.bookId??''}" title="פתח את המקום הזה ישירות באוצריא">📚 פתח באוצריא</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
 
         if(isExtra){
@@ -766,6 +766,7 @@ document.addEventListener('click',(e)=>{
         invoke('open_in_otzaria',{
             bookTitle:btn.dataset.bookTitle,
             lineIndex:Number(btn.dataset.lineIndex),
+            bookId:btn.dataset.bookId?Number(btn.dataset.bookId):null,
             dbPath:document.getElementById('dbPath')?.value.trim()||null
         }).then(()=>{
             btn.textContent='✅ נפתח!';
