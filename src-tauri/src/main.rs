@@ -798,6 +798,7 @@ struct RawRow {
     content: String,
     book_title: String,
     book_path: Option<String>,
+    book_id: i64,
 }
 
 fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
@@ -808,13 +809,14 @@ fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
         content: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
         book_title: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
         book_path: r.get::<_, Option<String>>(5)?,
+        book_id: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
     })
 }
 
 fn select_prefix(s: &DbSchema) -> String {
     format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
-         b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
+         b.{ti} AS bookTitle, b.{fp} AS bookPath, b.id AS bookId FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
         li = s.line_index,
         hr = s.he_ref,
         ct = s.content,
@@ -884,6 +886,7 @@ fn collect_batch(
                 content: strip_tags(&raw.content),
                 match_type: match_type.to_string(),
                 sefaria_url: None,
+                book_id: Some(raw.book_id),
             });
         }
     }
@@ -911,6 +914,7 @@ fn collect_single_stmt(
                 content: strip_tags(&raw.content),
                 match_type: match_type.to_string(),
                 sefaria_url: None,
+                book_id: Some(raw.book_id),
             });
         }
     }
@@ -936,6 +940,8 @@ struct RowOut {
     match_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sefaria_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    book_id: Option<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1265,6 +1271,7 @@ fn scan_chunk(
                                         content: strip_tags(&row.content),
                                         match_type: "exact".to_string(),
                                         sefaria_url: None,
+                                        book_id: Some(row.book_id),
                                     });
                                 }
                             }
@@ -1702,6 +1709,7 @@ fn compare_start(
                         content: hit.content.clone(),
                         match_type: "sefaria".to_string(),
                         sefaria_url: Some(hit.url.clone()),
+                        book_id: None,
                     };
                     if let Some(r) = scan.results[idx].as_mut() {
                         r.source = "sefaria".to_string();
@@ -1770,6 +1778,7 @@ fn compare_start(
                                 content: hit.content.clone(),
                                 match_type: "sefaria".to_string(),
                                 sefaria_url: Some(hit.url.clone()),
+                                book_id: None,
                             };
                             if let Some(r) = scan.results[idx].as_mut() {
                                 r.source = "sefaria".to_string();
@@ -1954,25 +1963,35 @@ fn check_ref_index(db_path: String) -> bool {
 /// book_title — שם הספר בדיוק כפי שמופיע בטור `title` של טבלת `book` ב-DB
 /// line_index — מספר השורה שאוצריא תגלול אליה
 #[tauri::command]
-fn open_in_otzaria(book_title: String, line_index: i64, db_path: Option<String>) -> Result<(), String> {
-    // שלב 1: מצא את book_id מה-DB לפי שם הספר
-    let db = db_path.unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
-    let book_id: Option<i64> = Connection::open_with_flags(
-        &db,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ).ok().and_then(|conn| {
-        // נסה שם עמודה title ואחר כך name
-        let sql = "SELECT id FROM book WHERE title = ?1 OR name = ?1 LIMIT 1";
-        conn.query_row(sql, rusqlite::params![&book_title], |r| r.get(0)).ok()
+fn open_in_otzaria(
+    book_title: String,
+    line_index: i64,
+    book_id: Option<i64>,
+    db_path: Option<String>,
+) -> Result<(), String> {
+    // שלב 1: book_id מגיע ישירות מהתוצאה (מאותו JOIN שכבר מצא את הספר).
+    // רק אם הוא לא סופק (תאימות לאחור) — ניפול לחיפוש לפי שם בתור fallback.
+    let resolved_id: Option<i64> = book_id.filter(|id| *id > 0).or_else(|| {
+        let db = db_path.unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+        Connection::open_with_flags(
+            &db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).ok().and_then(|conn| {
+            let cols = book_columns(&conn);
+            let has = |name: &str| cols.iter().any(|c| c == name);
+            let title_col = if has("title") { "title" } else { "name" };
+            let sql = format!("SELECT id FROM book WHERE {0} = ?1 LIMIT 1", title_col);
+            conn.query_row(&sql, rusqlite::params![&book_title], |r| r.get(0)).ok()
+        })
     });
 
-    // שלב 2: בנה deep link
-    // פורמט: otzaria://open/book/{id}?index={line_index}
-    //         otzaria://open/book/{title}?index={line_index}  (fallback ללא id)
-    let url = match book_id {
+    // שלב 2: בנה deep link — פורמט מאומת: otzaria://open/book/{id}?index={line_index}
+    let url = match resolved_id {
         Some(id) => format!("otzaria://open/book/{}?index={}", id, line_index),
-        None     => format!("otzaria://open/book/{}?index={}", 
-                            urlencode(&book_title), line_index),
+        None => return Err(format!(
+            "לא נמצא מזהה ספר עבור \"{}\" — לא ניתן לפתוח באוצריא במיקום המדויק",
+            book_title
+        )),
     };
 
     // שלב 3: פתח את ה-deep link — ללא חלון CMD גלוי
