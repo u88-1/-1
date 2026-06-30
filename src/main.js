@@ -333,21 +333,21 @@ function esc(t){return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 
 function highlightPhrase(content,phrase){
     if(!phrase||phrase.length<3)return esc(content);
-    const words=phrase.replace(/[.*+?^${}()|[\]\]/g,'\$&').split(/\s+/).filter(w=>w.length>2);
+    const words=phrase.replace(/[.*+?^${}()|[\]\\]/g,'\$&').split(/\s+/).filter(w=>w.length>2);
     if(!words.length)return esc(content);
     return esc(content).replace(new RegExp('('+words.join('|')+')','g'),'<mark class="phrase-hl">$1</mark>');
 }
 function highlight(text,query){
     if(!query||query.length<2)return esc(text);
-    return esc(text).replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\]/g,'\$&')+')','gi'),'<mark class="hl">$1</mark>');
+    return esc(text).replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\$&')+')','gi'),'<mark class="hl">$1</mark>');
 }
 function highlightContent(text,query){
     // הדגשה בתוך תוכן המאגר (content search)
     if(!query||query.length<2)return text;
-    return text.replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\]/g,'\$&')+')','gi'),'<mark class="content-hl">$1</mark>');
+    return text.replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\$&')+')','gi'),'<mark class="content-hl">$1</mark>');
 }
 function markRefInSentence(sentence,ref){
-    const escaped=ref.replace(/[.*+?^${}()|[\]\]/g,'\$&');
+    const escaped=ref.replace(/[.*+?^${}()|[\]\\]/g,'\$&');
     return esc(sentence).replace(new RegExp('[{\[(]'+escaped+'[}\])]','g'),'<span class="ref-in-sentence">$&</span>');
 }
 function badgeHtml(mt){
@@ -633,8 +633,7 @@ function exportData(format){
             if(!item.rows?.length)rows.push([item.ref,item.sentence||'','לא נמצא','','','']);
             else item.rows.forEach(r=>rows.push([item.ref,item.sentence||'',item.matchType,r.bookTitle,r.heRef,(r.content||'').substring(0,200)]));
         });
-        content='﻿'+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('
-');
+        content='﻿'+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
         filename='compare_sources.csv';mime='text/csv;charset=utf-8';
     }else{
         const lines=['דוח בודק מקורות','='.repeat(50),''];
@@ -645,8 +644,7 @@ function exportData(format){
             else item.rows.forEach((r,i)=>{lines.push(`תוצאה ${i+1}: ${r.bookTitle} | ${r.heRef}`);lines.push('תוכן: '+(r.content||'').substring(0,300));});
             lines.push('');
         });
-        content=lines.join('
-');filename='compare_sources.txt';mime='text/plain;charset=utf-8';
+        content=lines.join('\n');filename='compare_sources.txt';mime='text/plain;charset=utf-8';
     }
     const blob=new Blob([content],{type:mime});
     const url=URL.createObjectURL(blob);
@@ -775,8 +773,7 @@ document.addEventListener('click',(e)=>{
         }).catch(err=>{
             btn.textContent=orig;
             btn.disabled=false;
-            alert('שגיאה בפתיחת אוצריא:
-'+err);
+            alert('שגיאה בפתיחת אוצריא:\n'+err);
         });
 
     }else if(action==='close-page-expand'){
