@@ -348,7 +348,7 @@ function highlightContent(text,query){
 }
 function markRefInSentence(sentence,ref){
     const escaped=ref.replace(/[.*+?^${}()|[\]\\]/g,'\$&');
-    return esc(sentence).replace(new RegExp('[{\[(]'+escaped+'[}\])]','g'),'<span class="ref-in-sentence">$&</span>');
+    return esc(sentence).replace(new RegExp('[{\\[(]'+escaped+'[}\\])]','g'),'<span class="ref-in-sentence">$&</span>');
 }
 function badgeHtml(mt){
     const labels={exact:'✓ מדויק',prefix:'✓ קידומת',fuzzy:'✓ חלקי',sefaria:'✓ Sefaria 🌐',none:'✗ לא נמצא'};
