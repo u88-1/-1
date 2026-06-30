@@ -48,7 +48,7 @@
     "windows": {
       "nsis": {
         "languages": [
-          "English"
+          "Hebrew"
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
