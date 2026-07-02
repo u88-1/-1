@@ -622,7 +622,9 @@ fn detect_schema(conn: &Connection) -> DbSchema {
         content: "content".to_string(),
         book_id: if has(&lc, "bookId") { "bookId" } else { "book_id" }.to_string(),
         title: "title".to_string(),
-        file_path: if has(&bc, "filePath") { "filePath" } else { "file_path" }.to_string(),
+        file_path: if has(&bc, "filePath") { "filePath" }
+                   else if has(&bc, "file_path") { "file_path" }
+                   else { "" }.to_string(),
     }
 }
 
@@ -814,14 +816,19 @@ fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
 }
 
 fn select_prefix(s: &DbSchema) -> String {
+    let fp_expr = if s.file_path.is_empty() {
+        "NULL".to_string()
+    } else {
+        format!("b.{}", s.file_path)
+    };
     format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
-         b.{ti} AS bookTitle, b.{fp} AS bookPath, b.id AS bookId FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
+         b.{ti} AS bookTitle, {fp} AS bookPath, b.id AS bookId FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
         li = s.line_index,
         hr = s.he_ref,
         ct = s.content,
         ti = s.title,
-        fp = s.file_path,
+        fp = fp_expr,
         bid = s.book_id
     )
 }
@@ -1219,8 +1226,10 @@ fn scan_chunk(
     // שאילתות עם ESCAPE '\' למניעת ג'וקרים לא מכוונים
     let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
     let fts_sql = format!(
-        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, b.{ti} AS bookTitle, b.{fp} AS bookPath FROM line_fts f JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id WHERE line_fts MATCH ? LIMIT ?",
-        li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title, fp = s.file_path, bid = s.book_id
+        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, b.{ti} AS bookTitle, {fp} AS bookPath FROM line_fts f JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id WHERE line_fts MATCH ? LIMIT ?",
+        li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title,
+        fp = if s.file_path.is_empty() { "NULL".to_string() } else { format!("b.{}", s.file_path) },
+        bid = s.book_id
     );
     let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
 
