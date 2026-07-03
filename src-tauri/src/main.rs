@@ -342,25 +342,26 @@ fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
 /// הפתרון: מזהים אם הוריאנט מתחיל בשם מסכת/ספר ידוע, מגינים עליו,
 /// ומריצים replace_hebrew_numbers רק על היתרה (מספר הדף/פסוק).
 fn safe_replace_hebrew_numbers(v: &str) -> String {
-    // בדיקה אם v מתחיל בשם מסכת/ספר — נשתמש ב-ABBREV_RES שכבר מכיל
-    // את כל השמות המלאים. מחפשים את ההתאמה הארוכה ביותר (כבר ממוינות).
+    // בדיקה אם v מתחיל בקיצור/שם מסכת/ספר ידוע — נשתמש ב-ABBREV_RES.
+    // קריטי: משתמשים באורך ההתאמה עצמה (match.end()) ולא ב-target.len(),
+    // כי v עשוי עדיין להכיל את הקיצור הקצר (למשל "ב\"ק") ולא את השם
+    // המלא — חיתוך לפי אורך ה-target היה גורם ל-panic (out of bounds)
+    // או לחיתוך לא בגבול תו UTF-8 תקין.
     for (re, target) in ABBREV_RES.iter() {
-        if re.is_match(v).unwrap_or(false) {
-            // מצאנו שם מסכת — מגינים עליו ומריצים גימטריה רק על מה שאחריו
-            let name_len = target.chars().count();
-            let rest = v[target.len()..].trim_start();
+        if let Ok(Some(m)) = re.find(v) {
+            let rest = v[m.end()..].trim_start();
             if rest.is_empty() {
-                return v.to_string(); // רק שם ספר, אין מה להמיר
+                return target.clone(); // רק שם ספר/קיצור, אין מה להמיר
             }
             let rest_converted = replace_hebrew_numbers(rest);
             if rest_converted == rest {
-                return v.to_string(); // לא היה מה להמיר
+                return format!("{} {}", target, rest); // עדיין ננרמל את הקיצור לשם המלא
             }
-            // בנה מחדש: שם ספר + רווח + שאר מנורמל
+            // בנה מחדש: שם ספר מלא + רווח + שאר מנורמל
             return format!("{} {}", target, rest_converted);
         }
     }
-    // לא זוהה שם מסכת — מריצים replace_hebrew_numbers רגיל
+    // לא זוהה שם מסכת/קיצור — מריצים replace_hebrew_numbers רגיל
     replace_hebrew_numbers(v)
 }
 
