@@ -258,9 +258,9 @@ fn normalize_ref(input: &str) -> String {
 static RE_HEBNUM: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r#"(?<![א-ת])([א-ת׳״"']{1,6})(?![א-ת])"#).unwrap());
 static RE_PAGE_A: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?א['׳]?"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״׳']?א['׳]?"#).unwrap());
 static RE_PAGE_B: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״]?ב['׳]?"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״׳']?ב['׳]?"#).unwrap());
 // הסרת "דף" לפני מספר/אות — "דף לג" → "לג"
 static RE_DAF: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"דף\s+").unwrap());
@@ -336,6 +336,34 @@ fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
     vec![input.to_string()]
 }
 
+/// החלפת מספרי גימטריה בוריאנט — תוך הגנה על שמות מסכתות/ספרים ידועים.
+/// הבעיה: RE_HEBNUM ממיר מילים עבריות קצרות (≤6 תווים) כמו "חולין"→104,
+/// "ברכות"→... — ואז הוריאנט הופך לאסימון שלא קיים ב-DB.
+/// הפתרון: מזהים אם הוריאנט מתחיל בשם מסכת/ספר ידוע, מגינים עליו,
+/// ומריצים replace_hebrew_numbers רק על היתרה (מספר הדף/פסוק).
+fn safe_replace_hebrew_numbers(v: &str) -> String {
+    // בדיקה אם v מתחיל בשם מסכת/ספר — נשתמש ב-ABBREV_RES שכבר מכיל
+    // את כל השמות המלאים. מחפשים את ההתאמה הארוכה ביותר (כבר ממוינות).
+    for (re, target) in ABBREV_RES.iter() {
+        if re.is_match(v).unwrap_or(false) {
+            // מצאנו שם מסכת — מגינים עליו ומריצים גימטריה רק על מה שאחריו
+            let name_len = target.chars().count();
+            let rest = v[target.len()..].trim_start();
+            if rest.is_empty() {
+                return v.to_string(); // רק שם ספר, אין מה להמיר
+            }
+            let rest_converted = replace_hebrew_numbers(rest);
+            if rest_converted == rest {
+                return v.to_string(); // לא היה מה להמיר
+            }
+            // בנה מחדש: שם ספר + רווח + שאר מנורמל
+            return format!("{} {}", target, rest_converted);
+        }
+    }
+    // לא זוהה שם מסכת — מריצים replace_hebrew_numbers רגיל
+    replace_hebrew_numbers(v)
+}
+
 /// בניית סט וריאנטים לחיפוש (סדר עדיפות נשמר, ללא כפילויות).
 fn generate_variants(reference: &str) -> Vec<String> {
     let raw = normalize_ref(reference);
@@ -391,7 +419,7 @@ fn generate_variants(reference: &str) -> Vec<String> {
     let mut i = 0;
     while i < order.len() {
         let v = order[i].clone();
-        let wa = replace_hebrew_numbers(&v);
+        let wa = safe_replace_hebrew_numbers(&v);
         if wa != v {
             push(wa, &mut order, &mut seen);
         }
@@ -404,14 +432,14 @@ fn generate_variants(reference: &str) -> Vec<String> {
         let v = order[j].clone();
         for e in expand_tractate_abbreviations(&v) {
             push(e.clone(), &mut order, &mut seen);
-            let ea = replace_hebrew_numbers(&e);
+            let ea = safe_replace_hebrew_numbers(&e);
             if ea != e {
                 push(ea, &mut order, &mut seen);
             }
             let ep = normalize_talmud_page(&e);
             if ep != e {
                 push(ep.clone(), &mut order, &mut seen);
-                let epa = replace_hebrew_numbers(&ep);
+                let epa = safe_replace_hebrew_numbers(&ep);
                 if epa != ep {
                     push(epa, &mut order, &mut seen);
                 }
