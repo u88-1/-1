@@ -579,6 +579,10 @@ struct DbSchema {
     book_id: String,
     title: String,
     file_path: String,
+    /// עמודת tocEntryId — קיימת בסכמה החדשה בלבד; ריק-מחרוזת = לא קיימת
+    toc_entry_id: String,
+    /// עמודת charCount — קיימת בסכמה החדשה בלבד; ריק-מחרוזת = לא קיימת
+    char_count: String,
 }
 
 struct OpenDb {
@@ -625,6 +629,13 @@ fn detect_schema(conn: &Connection) -> DbSchema {
         file_path: if has(&bc, "filePath") { "filePath" }
                    else if has(&bc, "file_path") { "file_path" }
                    else { "" }.to_string(),
+        // עמודות חדשות — camelCase בסכמה החדשה, snake_case כ-fallback היסטורי
+        toc_entry_id: if has(&lc, "tocEntryId") { "tocEntryId" }
+                      else if has(&lc, "toc_entry_id") { "toc_entry_id" }
+                      else { "" }.to_string(),
+        char_count: if has(&lc, "charCount") { "charCount" }
+                    else if has(&lc, "char_count") { "char_count" }
+                    else { "" }.to_string(),
     }
 }
 
@@ -801,17 +812,23 @@ struct RawRow {
     book_title: String,
     book_path: Option<String>,
     book_id: i64,
+    toc_entry_id: Option<i64>,
+    char_count: Option<i64>,
 }
 
 fn map_raw(r: &rusqlite::Row) -> rusqlite::Result<RawRow> {
     Ok(RawRow {
-        line_id: r.get::<_, Option<i64>>(0)?.unwrap_or(0),
-        line_index: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-        he_ref: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-        content: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-        book_title: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-        book_path: r.get::<_, Option<String>>(5)?,
-        book_id: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+        line_id:      r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+        line_index:   r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+        he_ref:       r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        content:      r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        book_title:   r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        book_path:    r.get::<_, Option<String>>(5)?,
+        book_id:      r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+        // עמודות 7-8 קיימות רק כאשר select_prefix כולל אותן (סכמה חדשה).
+        // כאשר הן נבחרות כ-NULL (סכמה ישנה) — get מחזיר Ok(None) בטוח.
+        toc_entry_id: r.get::<_, Option<i64>>(7).unwrap_or(None),
+        char_count:   r.get::<_, Option<i64>>(8).unwrap_or(None),
     })
 }
 
@@ -821,15 +838,31 @@ fn select_prefix(s: &DbSchema) -> String {
     } else {
         format!("b.{}", s.file_path)
     };
+    // עמודות חדשות — NULL כ-fallback כאשר הסכמה הישנה לא מכילה אותן,
+    // כך ש-map_raw תמיד מקבל 9 עמודות ללא תלות בגרסת ה-DB.
+    let toc_expr = if s.toc_entry_id.is_empty() {
+        "NULL".to_string()
+    } else {
+        format!("l.{}", s.toc_entry_id)
+    };
+    let cc_expr = if s.char_count.is_empty() {
+        "NULL".to_string()
+    } else {
+        format!("l.{}", s.char_count)
+    };
     format!(
         "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
-         b.{ti} AS bookTitle, {fp} AS bookPath, b.id AS bookId FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
-        li = s.line_index,
-        hr = s.he_ref,
-        ct = s.content,
-        ti = s.title,
-        fp = fp_expr,
-        bid = s.book_id
+         b.{ti} AS bookTitle, {fp} AS bookPath, b.id AS bookId, \
+         {toc} AS tocEntryId, {cc} AS charCount \
+         FROM line l JOIN book b ON l.{bid}=b.id WHERE ",
+        li  = s.line_index,
+        hr  = s.he_ref,
+        ct  = s.content,
+        ti  = s.title,
+        fp  = fp_expr,
+        bid = s.book_id,
+        toc = toc_expr,
+        cc  = cc_expr,
     )
 }
 
@@ -885,15 +918,17 @@ fn collect_batch(
         let raw = row?;
         if seen.insert(raw.line_id) {
             out.push(RowOut {
-                he_ref: raw.he_ref,
-                book_title: raw.book_title,
-                file_path: raw.book_path,
-                line_index: Some(raw.line_index),
-                line_id: Some(raw.line_id),
-                content: strip_tags(&raw.content),
-                match_type: match_type.to_string(),
-                sefaria_url: None,
-                book_id: Some(raw.book_id),
+                he_ref:       raw.he_ref,
+                book_title:   raw.book_title,
+                file_path:    raw.book_path,
+                line_index:   Some(raw.line_index),
+                line_id:      Some(raw.line_id),
+                content:      strip_tags(&raw.content),
+                match_type:   match_type.to_string(),
+                sefaria_url:  None,
+                book_id:      Some(raw.book_id),
+                toc_entry_id: raw.toc_entry_id,
+                char_count:   raw.char_count,
             });
         }
     }
@@ -913,15 +948,17 @@ fn collect_single_stmt(
         let raw = row?;
         if seen.insert(raw.line_id) {
             out.push(RowOut {
-                he_ref: raw.he_ref,
-                book_title: raw.book_title,
-                file_path: raw.book_path,
-                line_index: Some(raw.line_index),
-                line_id: Some(raw.line_id),
-                content: strip_tags(&raw.content),
-                match_type: match_type.to_string(),
-                sefaria_url: None,
-                book_id: Some(raw.book_id),
+                he_ref:       raw.he_ref,
+                book_title:   raw.book_title,
+                file_path:    raw.book_path,
+                line_index:   Some(raw.line_index),
+                line_id:      Some(raw.line_id),
+                content:      strip_tags(&raw.content),
+                match_type:   match_type.to_string(),
+                sefaria_url:  None,
+                book_id:      Some(raw.book_id),
+                toc_entry_id: raw.toc_entry_id,
+                char_count:   raw.char_count,
             });
         }
     }
@@ -949,6 +986,12 @@ struct RowOut {
     sefaria_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     book_id: Option<i64>,
+    /// מזהה רשומת תוכן עניינים — None בסכמה ישנה או בתוצאות Sefaria
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toc_entry_id: Option<i64>,
+    /// מספר תווים בשורה — שימושי לסינון שורות קצרות/כותרות, None בסכמה ישנה
+    #[serde(skip_serializing_if = "Option::is_none")]
+    char_count: Option<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1017,6 +1060,10 @@ struct LineRowOut {
     he_ref: String,
     content: String,
     is_focus: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toc_entry_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    char_count: Option<i64>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1211,6 +1258,7 @@ fn scan_chunk(
     chunk_start: usize,
     chunk: &[RefCtx],
     fuzzy: bool,
+    min_char_count: i64,
     abort: &Arc<AtomicBool>,
     app: &AppHandle,
     job_id: &str,
@@ -1223,15 +1271,27 @@ fn scan_chunk(
     let s = &opendb.schema;
     let base = select_prefix(s);
 
+    // תנאי סינון charCount — מתווסף לשאילתות רק כאשר העמודה קיימת והסף > 0.
+    // כך שורות קצרות מדי (כותרות, סימני פרשה, שורות ריקות) לא מחזירות התאמה.
+    let cc_filter = if min_char_count > 0 && !s.char_count.is_empty() {
+        format!("AND l.{} >= {} ", s.char_count, min_char_count)
+    } else {
+        String::new()
+    };
+
     // שאילתות עם ESCAPE '\' למניעת ג'וקרים לא מכוונים
-    let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    let prefix_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE {cc}LIMIT ?", hr = s.he_ref, cc = cc_filter);
     let fts_sql = format!(
-        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, b.{ti} AS bookTitle, {fp} AS bookPath FROM line_fts f JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id WHERE line_fts MATCH ? LIMIT ?",
-        li = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title,
-        fp = if s.file_path.is_empty() { "NULL".to_string() } else { format!("b.{}", s.file_path) },
-        bid = s.book_id
+        "SELECT l.id AS lineId, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
+         b.{ti} AS bookTitle, {fp} AS bookPath, b.id AS bookId, NULL AS tocEntryId, NULL AS charCount \
+         FROM line_fts f JOIN line l ON l.id = f.rowid JOIN book b ON l.{bid}=b.id \
+         WHERE line_fts MATCH ? {cc}LIMIT ?",
+        li  = s.line_index, hr = s.he_ref, ct = s.content, ti = s.title,
+        fp  = if s.file_path.is_empty() { "NULL".to_string() } else { format!("b.{}", s.file_path) },
+        bid = s.book_id,
+        cc  = cc_filter,
     );
-    let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE LIMIT ?", hr = s.he_ref);
+    let like_sql = format!("{base}l.{hr} LIKE ? ESCAPE '\\' COLLATE NOCASE {cc}LIMIT ?", hr = s.he_ref, cc = cc_filter);
 
     // הכנת שאילתות prefix/fuzzy פעם אחת לכל thread — prepare_cached חוסך
     // את עלות ה-compile החוזרת בכל קריאה (חשוב כשיש מאות הפניות).
@@ -1272,15 +1332,17 @@ fn scan_chunk(
                             if let Some(rows) = rows {
                                 for row in rows.flatten() {
                                     out.push(RowOut {
-                                        he_ref: row.he_ref,
-                                        book_title: row.book_title,
-                                        file_path: row.book_path,
-                                        line_index: Some(row.line_index),
-                                        line_id: Some(row.line_id),
-                                        content: strip_tags(&row.content),
-                                        match_type: "exact".to_string(),
-                                        sefaria_url: None,
-                                        book_id: Some(row.book_id),
+                                        he_ref:       row.he_ref,
+                                        book_title:   row.book_title,
+                                        file_path:    row.book_path,
+                                        line_index:   Some(row.line_index),
+                                        line_id:      Some(row.line_id),
+                                        content:      strip_tags(&row.content),
+                                        match_type:   "exact".to_string(),
+                                        sefaria_url:  None,
+                                        book_id:      Some(row.book_id),
+                                        toc_entry_id: row.toc_entry_id,
+                                        char_count:   row.char_count,
                                     });
                                 }
                             }
@@ -1403,6 +1465,7 @@ fn local_scan_parallel(
     db_path: &str,
     refs: &[RefCtx],
     fuzzy: bool,
+    min_char_count: i64,
     abort: &Arc<AtomicBool>,
     app: &AppHandle,
     job_id: &str,
@@ -1455,6 +1518,7 @@ fn local_scan_parallel(
                     start,
                     chunk,
                     fuzzy,
+                    min_char_count,
                     abort,
                     app,
                     job_id,
@@ -1519,6 +1583,10 @@ struct Options {
     fuzzy: bool,
     #[serde(default = "default_true")]
     sefaria: bool,
+    /// סינון שורות קצרות מדי (כותרות, שורות ריקות וכד') לפי charCount.
+    /// 0 = ללא סינון (ברירת מחדל לתאימות לאחור עם סכמה ישנה).
+    #[serde(default)]
+    min_char_count: i64,
 }
 fn default_true() -> bool {
     true
@@ -1554,6 +1622,7 @@ fn compare_start(
     let brackets = options.brackets.clone().unwrap_or_else(|| "curly".to_string());
     let fuzzy = options.fuzzy;
     let use_sefaria = options.sefaria;
+    let min_char_count = options.min_char_count;
 
     tauri::async_runtime::spawn(async move {
         let cleanup = |jobs_arc: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>| {
@@ -1656,7 +1725,7 @@ fn compare_start(
                 let mut guard = scan_db.lock().unwrap();
                 ensure_db(&mut guard, &scan_db_path)?;
             }
-            local_scan_parallel(&scan_db_path, &unique, fuzzy, &scan_abort, &scan_app, &scan_job)
+            local_scan_parallel(&scan_db_path, &unique, fuzzy, min_char_count, &scan_abort, &scan_app, &scan_job)
         })
         .await;
 
@@ -1710,15 +1779,17 @@ fn compare_start(
                 // יישום מיידי של פגיעות מטמון, בלי להמתין לשום קריאת רשת.
                 for (idx, hit) in from_cache {
                     let row = RowOut {
-                        he_ref: hit.he_ref.clone(),
-                        book_title: hit.book_title.clone(),
-                        file_path: None,
-                        line_index: None,
-                        line_id: None,
-                        content: hit.content.clone(),
-                        match_type: "sefaria".to_string(),
-                        sefaria_url: Some(hit.url.clone()),
-                        book_id: None,
+                        he_ref:       hit.he_ref.clone(),
+                        book_title:   hit.book_title.clone(),
+                        file_path:    None,
+                        line_index:   None,
+                        line_id:      None,
+                        content:      hit.content.clone(),
+                        match_type:   "sefaria".to_string(),
+                        sefaria_url:  Some(hit.url.clone()),
+                        book_id:      None,
+                        toc_entry_id: None, // לא רלוונטי לתוצאות Sefaria
+                        char_count:   None,
                     };
                     if let Some(r) = scan.results[idx].as_mut() {
                         r.source = "sefaria".to_string();
@@ -1779,15 +1850,17 @@ fn compare_start(
                             );
 
                             let row = RowOut {
-                                he_ref: hit.he_ref.clone(),
-                                book_title: hit.book_title.clone(),
-                                file_path: None,
-                                line_index: None,
-                                line_id: None,
-                                content: hit.content.clone(),
-                                match_type: "sefaria".to_string(),
-                                sefaria_url: Some(hit.url.clone()),
-                                book_id: None,
+                                he_ref:       hit.he_ref.clone(),
+                                book_title:   hit.book_title.clone(),
+                                file_path:    None,
+                                line_index:   None,
+                                line_id:      None,
+                                content:      hit.content.clone(),
+                                match_type:   "sefaria".to_string(),
+                                sefaria_url:  Some(hit.url.clone()),
+                                book_id:      None,
+                                toc_entry_id: None, // לא רלוונטי לתוצאות Sefaria
+                                char_count:   None,
                             };
                             if let Some(r) = scan.results[idx].as_mut() {
                                 r.source = "sefaria".to_string();
@@ -1890,13 +1963,19 @@ fn expand_page(
         .map_err(|e| e.to_string())?;
 
     let radius = 40i64;
+    // עמודות חדשות — NULL fallback לסכמה ישנה (אינדקסים 4 ו-5)
+    let toc_expr = if s.toc_entry_id.is_empty() { "NULL".to_string() } else { format!("l.{}", s.toc_entry_id) };
+    let cc_expr  = if s.char_count.is_empty()   { "NULL".to_string() } else { format!("l.{}", s.char_count)   };
     let sql = format!(
-        "SELECT l.id, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content \
+        "SELECT l.id, l.{li} AS lineIndex, l.{hr} AS heRef, l.{ct} AS content, \
+         {toc} AS tocEntryId, {cc} AS charCount \
          FROM line l WHERE l.{bid}=? AND l.{li} BETWEEN ? AND ? ORDER BY l.{li}",
-        li = s.line_index,
-        hr = s.he_ref,
-        ct = s.content,
-        bid = s.book_id
+        li  = s.line_index,
+        hr  = s.he_ref,
+        ct  = s.content,
+        bid = s.book_id,
+        toc = toc_expr,
+        cc  = cc_expr,
     );
     let mut stmt = opendb.conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1905,11 +1984,13 @@ fn expand_page(
             |r| {
                 let id: i64 = r.get::<_, Option<i64>>(0)?.unwrap_or(0);
                 Ok(LineRowOut {
-                    line_id: id,
-                    line_index: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                    he_ref: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    content: strip_tags(&r.get::<_, Option<String>>(3)?.unwrap_or_default()),
-                    is_focus: id == line_id,
+                    line_id:      id,
+                    line_index:   r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    he_ref:       r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    content:      strip_tags(&r.get::<_, Option<String>>(3)?.unwrap_or_default()),
+                    is_focus:     id == line_id,
+                    toc_entry_id: r.get::<_, Option<i64>>(4).unwrap_or(None),
+                    char_count:   r.get::<_, Option<i64>>(5).unwrap_or(None),
                 })
             },
         )
