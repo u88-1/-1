@@ -796,7 +796,12 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
     let fld_ref = schema.get_field("he_ref").unwrap();
 
     let mut qp = QueryParser::for_index(&index, vec![fld_ref]);
-    // נסה exact → prefix → fuzzy
+    // דרישת AND בין כל המילים (במקום ברירת המחדל OR) — קריטי: שאילתת prefix
+    // עם כמה מילים ("פאה פרק ה משנה ג*") ב-OR הייתה מתאימה כל שורה שמכילה
+    // *חלק* מהמילים (למשל רק "ה" ו-"ג") ומקבלת ציון גבוה בגלל קוצר השדה,
+    // מה שגרם להתאמות שגויות/הפוכות (למשל "ג, ה" במקום "ה, ג" המבוקש)
+    // להיות מדורגות ראשונות ומסומנות "exact" בטעות.
+    qp.set_conjunction_by_default();
     let escaped = variant.replace('"', "");
     let queries = if fuzzy {
         vec![
@@ -821,6 +826,14 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
         }).collect();
     }
     vec![]
+}
+
+/// נרמול קל להשוואת he_ref מול וריאנט חיפוש — מסיר רווחים/פיסוק כדי
+/// שהשוואת "האם זו התאמה אמיתית" לא תיכשל על הבדלי רווח/פסיק בלבד.
+fn loose_normalize_for_compare(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() && *c != ',' && *c != '.' && *c != ':' && *c != '\'' && *c != '"' && *c != '״' && *c != '׳')
+        .collect()
 }
 
 fn tantivy_index_exists(db_path: &str) -> bool {
@@ -1394,6 +1407,8 @@ fn scan_chunk(
             let mut found_any = false;
             for v in variants {
                 let ids = tantivy_search(db_path, v, MAX_RESULTS_PER_REF as usize, false);
+                // נרמול קל של הוריאנט הנוכחי להשוואה — פעם אחת מחוץ ללולאה
+                let v_norm = loose_normalize_for_compare(v);
                 for id in ids {
                     if seen.insert(id) {
                         let row_sql = format!("{base}l.id = ? LIMIT ?");
@@ -1401,6 +1416,14 @@ fn scan_chunk(
                             let rows = st.query_map(params![id, 1i64], map_raw).ok();
                             if let Some(rows) = rows {
                                 for row in rows.flatten() {
+                                    // קריטי: Tantivy עשוי להחזיר תוצאה דרך שאילתת
+                                    // prefix/OR רופפת (למשל התאמת מילים בודדות) שאינה
+                                    // באמת זהה להפניה המבוקשת. מתייגים "exact" רק אם
+                                    // ה-he_ref שנמצא זהה בפועל לוריאנט (אחרי נרמול קל
+                                    // של רווחים/פיסוק) — אחרת "fuzzy", כדי לא להציג
+                                    // בטעות הפניה שונה (למשל פרק/משנה הפוכים) כמדויקת.
+                                    let row_norm = loose_normalize_for_compare(&row.he_ref);
+                                    let mt = if row_norm == v_norm { "exact" } else { "fuzzy" };
                                     out.push(RowOut {
                                         he_ref:       row.he_ref,
                                         book_title:   row.book_title,
@@ -1408,17 +1431,19 @@ fn scan_chunk(
                                         line_index:   Some(row.line_index),
                                         line_id:      Some(row.line_id),
                                         content:      strip_tags(&row.content),
-                                        match_type:   "exact".to_string(),
+                                        match_type:   mt.to_string(),
                                         sefaria_url:  None,
                                         book_id:      Some(row.book_id),
                                         toc_entry_id: row.toc_entry_id,
                                         char_count:   row.char_count,
                                     });
+                                    if mt == "exact" {
+                                        has_exact = true;
+                                        found_any = true;
+                                    }
                                 }
                             }
                         }
-                        found_any = true;
-                        has_exact = true;
                     }
                 }
                 if has_exact { break; }
