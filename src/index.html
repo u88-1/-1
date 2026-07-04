@@ -24,6 +24,10 @@
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2" stroke-linecap="round"/></svg>
                 היסטוריה
             </a>
+            <a class="nav-link" href="#" data-page="biblio">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.5"/><circle cx="14" cy="6" r="2.5"/><circle cx="10" cy="15" r="2.5"/><path d="M8 7.5L9 13M12 7.5L11 13" stroke-linecap="round"/></svg>
+                ניתוח ביבליוגרפי
+            </a>
             <a class="nav-link" href="#" data-page="about">
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 7v.5" stroke-linecap="round"/></svg>
                 אודות
@@ -114,6 +118,95 @@
                 <button class="run-btn" id="clearHistoryBtn" style="background:rgba(248,113,113,0.15);color:var(--red);border:1px solid rgba(248,113,113,0.25);">🗑 נקה היסטוריה</button>
             </header>
             <div id="historyList"></div>
+        </div>
+
+        <!-- ══ PAGE: ניתוח ביבליוגרפי ══ -->
+        <div id="page-biblio" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">ניתוח <span>ביבליוגרפי</span></h1>
+                    <p class="page-sub">סטטיסטיקת מקורות, ענן ציטוטים וקשרים בין מקורות — עם איחוד אוטומטי של כתיבים שונים לאותו מקור</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📚</div>טקסט לניתוח</div>
+                <div class="fields" style="grid-template-columns:1fr;margin-bottom:10px">
+                    <div class="field">
+                        <label class="field-label" for="biblioFile">טעינת קובץ טקסט <span class="tag-opt">.txt</span></label>
+                        <div class="field-wrap">
+                            <input type="file" id="biblioFileInput" accept=".txt" style="display:none" />
+                            <input id="biblioFile" type="text" class="field-input" placeholder="לא נבחר קובץ — אפשר גם להדביק טקסט ישירות למטה" readonly />
+                            <button class="browse-btn" data-action="biblio-browse" title="בחר קובץ טקסט">📂</button>
+                        </div>
+                        <p class="field-hint">לקבצי Word/PDF: הרץ אותם קודם ב"השוואת מקורות", ואז הדבק את הטקסט כאן.</p>
+                    </div>
+                </div>
+                <textarea id="biblioText" class="paste-textarea" style="min-height:160px" placeholder="הדבק כאן טקסט עם הפניות בסוגריים, למשל: כתב הרמב&quot;ם {שבת ז, א} וכן {ברכות ב.} ...&#10;&#10;טיפ: הוסף שורה ריקה בין פסקאות, וציין 'פרק X' / 'סימן X' כדי שהמערכת תעקוב אחרי מיקום כל מקור במבנה הספר."></textarea>
+                <div class="bracket-row">
+                    <span class="field-label" style="margin-left:12px">סוג סוגריים:</span>
+                    <div class="bracket-opts">
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="curly" checked /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
+                    </div>
+                </div>
+                <button id="biblioRunBtn" class="run-btn">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                    הפעל ניתוח ביבליוגרפי
+                </button>
+            </section>
+
+            <div id="biblioStatus" class="status-bar" style="display:none"></div>
+
+            <div id="biblioResults" style="display:none">
+                <div class="summary-grid" id="biblioKpis" style="margin-bottom:16px"></div>
+
+                <section class="panel">
+                    <div class="panel-title" style="justify-content:space-between;display:flex;align-items:center">
+                        <div style="display:flex;align-items:center;gap:10px"><div class="panel-icon">📊</div>תוצאות הניתוח</div>
+                        <div style="display:flex;gap:8px">
+                            <button class="browse-btn" id="biblioDownloadCsv" title="הורד טבלת מקורות כ-CSV">⬇️ CSV</button>
+                            <button class="browse-btn" id="biblioDownloadTxt" title="הורד את הטקסט (לאחר תיקוני שם אם בוצעו)">💾 טקסט מתוקן</button>
+                        </div>
+                    </div>
+                    <div class="bracket-opts" style="margin-bottom:14px">
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="stats" checked /><span class="bracket-btn">📋</span>סטטיסטיקה</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="cloud" /><span class="bracket-btn">☁️</span>ענן מקורות</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="relations" /><span class="bracket-btn">🔗</span>קשרים</label>
+                    </div>
+
+                    <div id="biblioTabStats" class="biblio-tab-view">
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr>
+                                    <th>מקור (לחץ ✏️ לתיקון גלובלי בכל הצורות שנמצאו)</th>
+                                    <th style="width:70px">מופעים</th>
+                                    <th style="width:160px">מיקומים</th>
+                                    <th style="width:70px">זוהה?</th>
+                                </tr></thead>
+                                <tbody id="biblioStatsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="biblioTabCloud" class="biblio-tab-view" style="display:none">
+                        <div class="cloud-box" id="biblioCloud"></div>
+                    </div>
+
+                    <div id="biblioTabRelations" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">מקורות (לאחר איחוד וריאציות) שנוטים להופיע יחד באותה פסקה:</p>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr><th>מקור א׳</th><th>מקור ב׳</th><th style="width:120px">הופעות משותפות</th></tr></thead>
+                                <tbody id="biblioRelationsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </div>
         </div>
 
         <!-- ══ PAGE: אודות ══ -->

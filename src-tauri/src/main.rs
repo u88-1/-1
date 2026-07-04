@@ -595,6 +595,188 @@ fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  3ב. ניתוח ביבליוגרפי — סטטיסטיקה, ענן מקורות, קורלציות בין מקורות
+//  שונה משורש מגישת "מחרוזת גולמית": לפני קיבוץ, כל הפניה עוברת את אותו
+//  צינור נרמול המשמש לחיפוש עצמו (safe_replace_hebrew_numbers,
+//  expand_tractate_abbreviations, normalize_talmud_page) — כך ש"ברכות ב."
+//  ו"ברכות דף ב, עמוד א" מזוהות כאותו מקור, ולא נספרות כשניים נפרדים.
+// ════════════════════════════════════════════════════════════════════════════
+
+static RE_CHAPTER_MARK: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(פרק\s+[א-ת0-9]+['׳]?|סימן\s+[א-ת0-9]+['׳]?|חלק\s+[א-ת0-9]+['׳]?|הלכות\s+[א-ת]+)").unwrap()
+});
+
+/// מפתח קיבוץ קנוני להפניה — מריץ את אותו צינור נרמול המשמש לחיפוש,
+/// כדי שוריאציות כתיבה שונות של אותו מקור יתקבצו יחד.
+fn canonical_key(reference: &str) -> String {
+    let base = normalize_ref(reference);
+    let base = RE_DAF.replace_all(&base, "").trim().to_string();
+    let expanded = expand_tractate_abbreviations(&base)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| base.clone());
+    let paged = normalize_talmud_page(&expanded);
+    let final_form = safe_replace_hebrew_numbers(&paged);
+    RE_WS.replace_all(&final_form, " ").trim().to_string()
+}
+
+/// האם ההפניה מתחילה בשם מסכת/ספר/חלק שו"ע מוכר — אינדיקטור איכות-נתונים:
+/// מקור "לא מזוהה" עשוי להעיד על שגיאת כתיב או ספר שהמערכת עדיין לא מכירה.
+fn is_recognized_source(reference: &str) -> bool {
+    let base = normalize_ref(reference);
+    ABBREV_RES.iter().any(|(re, _)| re.is_match(&base).unwrap_or(false))
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BiblioSource {
+    canonical: String,
+    display_name: String,
+    variants_seen: Vec<String>,
+    count: i64,
+    chapters: Vec<String>,
+    recognized: bool,
+    paragraph_indices: Vec<usize>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BiblioRelation {
+    source_a: String,
+    source_b: String,
+    count: i64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BiblioReport {
+    total_citations: i64,
+    unique_sources: i64,
+    paragraphs_scanned: i64,
+    diversity_pct: f64,
+    unrecognized_count: i64,
+    sources: Vec<BiblioSource>,
+    relations: Vec<BiblioRelation>,
+}
+
+struct SrcAgg {
+    display_name: String,
+    variants_seen: HashSet<String>,
+    count: i64,
+    chapters: HashSet<String>,
+    recognized: bool,
+    paragraph_indices: Vec<usize>,
+}
+
+static RE_PARA_SPLIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n\s*\n").unwrap());
+
+#[tauri::command]
+fn analyze_bibliography(text: String, brackets: Option<String>) -> Result<BiblioReport, String> {
+    let brackets = brackets.unwrap_or_else(|| "curly".to_string());
+    let (open, close) = bracket_chars(&brackets);
+    let eo = regex_escape(&open.to_string());
+    let ec = regex_escape(&close.to_string());
+    let ref_re = Regex::new(&format!("{}([^{}]+){}", eo, ec, ec)).map_err(|e| e.to_string())?;
+
+    // אם אין כלל שורות ריקות מפרידות (טקסט שחולץ מ-PDF/docx לעיתים מגיע כך),
+    // נופלים חזרה לפיצול לפי שורה בודדת כדי לא לאבד את כל מבנה הפסקאות.
+    let mut paragraphs: Vec<&str> = RE_PARA_SPLIT.split(&text).collect();
+    if paragraphs.len() <= 1 {
+        paragraphs = text.lines().collect();
+    }
+
+    let mut sources: HashMap<String, SrcAgg> = HashMap::new();
+    let mut correlation: HashMap<(String, String), i64> = HashMap::new();
+    let mut current_chapter = "פתיחה / תחילת המסמך".to_string();
+    let mut total_citations: i64 = 0;
+
+    for (pidx, para) in paragraphs.iter().enumerate() {
+        if let Some(m) = RE_CHAPTER_MARK.find(para) {
+            current_chapter = m.as_str().trim().to_string();
+        }
+
+        let mut in_paragraph: HashSet<String> = HashSet::new();
+        for cap in ref_re.captures_iter(para) {
+            let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("").trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let key = canonical_key(raw);
+            if key.is_empty() {
+                continue;
+            }
+            total_citations += 1;
+            in_paragraph.insert(key.clone());
+
+            let entry = sources.entry(key).or_insert_with(|| SrcAgg {
+                display_name: raw.to_string(),
+                variants_seen: HashSet::new(),
+                count: 0,
+                chapters: HashSet::new(),
+                recognized: is_recognized_source(raw),
+                paragraph_indices: Vec::new(),
+            });
+            entry.count += 1;
+            entry.variants_seen.insert(raw.to_string());
+            entry.chapters.insert(current_chapter.clone());
+            entry.paragraph_indices.push(pidx);
+        }
+
+        // קורלציה — כל זוג מקורות קנוניים שהופיעו יחד באותה פסקה
+        let list: Vec<&String> = in_paragraph.iter().collect();
+        for i in 0..list.len() {
+            for j in (i + 1)..list.len() {
+                let mut pair = [list[i].clone(), list[j].clone()];
+                pair.sort();
+                let key = (pair[0].clone(), pair[1].clone());
+                *correlation.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if total_citations == 0 {
+        return Err(format!(
+            "לא נמצאו מקורות בפורמט הסוגריים שנבחר ({}{})",
+            open, close
+        ));
+    }
+
+    let unique_count = sources.len() as i64;
+    let unrecognized_count = sources.values().filter(|s| !s.recognized).count() as i64;
+    let diversity_pct = (unique_count as f64 / total_citations as f64) * 100.0;
+
+    let mut source_list: Vec<BiblioSource> = sources
+        .into_iter()
+        .map(|(canonical, agg)| BiblioSource {
+            canonical,
+            display_name: agg.display_name,
+            variants_seen: agg.variants_seen.into_iter().collect(),
+            count: agg.count,
+            chapters: agg.chapters.into_iter().collect(),
+            recognized: agg.recognized,
+            paragraph_indices: agg.paragraph_indices,
+        })
+        .collect();
+    source_list.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let mut relations: Vec<BiblioRelation> = correlation
+        .into_iter()
+        .map(|((source_a, source_b), count)| BiblioRelation { source_a, source_b, count })
+        .collect();
+    relations.sort_by(|a, b| b.count.cmp(&a.count));
+
+    Ok(BiblioReport {
+        total_citations,
+        unique_sources: unique_count,
+        paragraphs_scanned: paragraphs.len() as i64,
+        diversity_pct,
+        unrecognized_count,
+        sources: source_list,
+        relations,
+    })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  4. חילוץ טקסט מקבצים (txt / docx / pdf)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -2210,7 +2392,8 @@ fn main() {
             pick_file,
             open_in_otzaria,
             build_ref_index,
-            check_ref_index
+            check_ref_index,
+            analyze_bibliography
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};

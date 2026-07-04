@@ -112,7 +112,7 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 
 // ── הצגת דפים ─────────────────────────────────────────
 function showPage(name){
-    ['compare','history','about','settings'].forEach(p=>{
+    ['compare','history','biblio','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
         if(el)el.style.display=p===name?'':'none';
     });
@@ -734,6 +734,9 @@ document.addEventListener('click',(e)=>{
     if(action==='browse'){
         browseFile(el.dataset.type);
 
+    }else if(action==='biblio-browse'){
+        document.getElementById('biblioFileInput')?.click();
+
     }else if(action==='expand-page'){
         expandTalmudPage(Number(el.dataset.lineId),el.dataset.heRef,el);
 
@@ -799,3 +802,188 @@ document.addEventListener('click',(e)=>{
 });
 
 loadSettingsUI();
+
+// ════════════════════════════════════════════════════════════════════════
+//  ניתוח ביבליוגרפי — סטטיסטיקה, ענן מקורות, קורלציות (v1)
+// ════════════════════════════════════════════════════════════════════════
+let biblioReport = null;
+
+document.getElementById('biblioFileInput')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    document.getElementById('biblioFile').value = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => { document.getElementById('biblioText').value = ev.target.result; };
+    reader.readAsText(file, 'UTF-8');
+});
+
+function getBiblioBrackets(){
+    const el = document.querySelector('input[name="biblioBrackets"]:checked');
+    return el ? el.value : 'curly';
+}
+function bracketChars(kind){
+    return kind === 'square' ? ['[',']'] : kind === 'round' ? ['(',')'] : ['{','}'];
+}
+
+document.getElementById('biblioRunBtn')?.addEventListener('click', async () => {
+    const text = document.getElementById('biblioText').value;
+    const statusEl = document.getElementById('biblioStatus');
+    const resultsEl = document.getElementById('biblioResults');
+    if (!text.trim()) {
+        statusEl.style.display='block'; statusEl.className='status-bar error';
+        statusEl.textContent = 'הדבק או טען טקסט תחילה.';
+        return;
+    }
+    statusEl.style.display='block'; statusEl.className='status-bar working';
+    statusEl.textContent = 'מנתח...';
+    resultsEl.style.display='none';
+    try {
+        biblioReport = await invoke('analyze_bibliography', { text, brackets: getBiblioBrackets() });
+        statusEl.style.display='none';
+        resultsEl.style.display='block';
+        renderBiblioKpis(biblioReport);
+        renderBiblioStats(biblioReport);
+        renderBiblioCloud(biblioReport);
+        renderBiblioRelations(biblioReport);
+    } catch(err) {
+        statusEl.style.display='block'; statusEl.className='status-bar error';
+        statusEl.textContent = 'שגיאה: ' + err;
+    }
+});
+
+function renderBiblioKpis(r){
+    const el = document.getElementById('biblioKpis');
+    el.innerHTML = `
+        <div class="stat-card"><div class="stat-num">${r.totalCitations}</div><div class="stat-label">סך ציטוטים</div></div>
+        <div class="stat-card s-found"><div class="stat-num">${r.uniqueSources}</div><div class="stat-label">מקורות ייחודיים</div></div>
+        <div class="stat-card"><div class="stat-num">${r.paragraphsScanned}</div><div class="stat-label">פסקאות נסרקו</div></div>
+        <div class="stat-card ${r.unrecognizedCount>0?'s-missing':''}"><div class="stat-num">${r.unrecognizedCount}</div><div class="stat-label">מקורות לא מזוהים</div></div>
+        <div class="stat-card"><div class="stat-num">${r.diversityPct.toFixed(0)}%</div><div class="stat-label">גיוון ביבליוגרפי</div></div>
+    `;
+}
+
+function renderBiblioStats(r){
+    const tbody = document.getElementById('biblioStatsBody');
+    tbody.innerHTML = '';
+    r.sources.forEach(src => {
+        const tr = document.createElement('tr');
+
+        const tdName = document.createElement('td');
+        tdName.className = 'biblio-name-cell';
+        const variantsHint = src.variantsSeen.length > 1 ? ` <span class="biblio-chapters">(${src.variantsSeen.length} צורות כתיב)</span>` : '';
+        tdName.innerHTML = `${escapeHtml(src.canonical)} ✏️${variantsHint}`;
+        tdName.addEventListener('click', () => enableBiblioEdit(tdName, src));
+
+        const tdCount = document.createElement('td');
+        tdCount.textContent = src.count;
+
+        const tdLocs = document.createElement('td');
+        tdLocs.className = 'biblio-chapters';
+        tdLocs.textContent = src.chapters.join(', ');
+
+        const tdRec = document.createElement('td');
+        tdRec.innerHTML = src.recognized ? '✓' : '<span class="biblio-unrecognized">✗</span>';
+
+        tr.append(tdName, tdCount, tdLocs, tdRec);
+        tbody.appendChild(tr);
+    });
+}
+
+function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function enableBiblioEdit(td, src){
+    td.onclick = null;
+    td.innerHTML = `
+        <div class="biblio-edit-row">
+            <input type="text" value="${escapeHtml(src.displayName)}" id="biblioEditInput" />
+            <button class="biblio-mini-btn primary" id="biblioEditSave">שמור בכל הצורות</button>
+            <button class="biblio-mini-btn" id="biblioEditCancel">בטל</button>
+        </div>
+    `;
+    document.getElementById('biblioEditInput').focus();
+    document.getElementById('biblioEditCancel').addEventListener('click', () => renderBiblioStats(biblioReport));
+    document.getElementById('biblioEditSave').addEventListener('click', () => saveBiblioRename(src));
+}
+
+/// שינוי שם גלובלי — מחליף את *כל* הצורות שנמצאו (variantsSeen) עבור מקור
+/// זה, לא רק צורת כתיבה אחת. זה ה"שדרוג" מעל הסקיצה המקורית: אם אותו
+/// מקור נכתב פעם כ"ברכות ב." ופעם כ"ברכות דף ב, עמוד א" — לחיצה אחת
+/// מתקנת את שתי הצורות בכל הטקסט בבת אחת.
+function saveBiblioRename(src){
+    const newName = document.getElementById('biblioEditInput').value.trim();
+    if (!newName) { renderBiblioStats(biblioReport); return; }
+    let fullText = document.getElementById('biblioText').value;
+    const [open, close] = bracketChars(getBiblioBrackets());
+    const escRe = s => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const eo = escRe(open), ec = escRe(close);
+    src.variantsSeen.forEach(variant => {
+        const re = new RegExp(`${eo}\\s*${escRe(variant)}\\s*${ec}`, 'g');
+        fullText = fullText.replace(re, `${open}${newName}${close}`);
+    });
+    document.getElementById('biblioText').value = fullText;
+    document.getElementById('biblioRunBtn').click();
+}
+
+function renderBiblioCloud(r){
+    const el = document.getElementById('biblioCloud');
+    el.innerHTML = '';
+    const maxCount = Math.max(...r.sources.map(s => s.count), 1);
+    r.sources.forEach(src => {
+        const tag = document.createElement('span');
+        tag.className = 'cloud-tag';
+        tag.textContent = src.canonical;
+        const size = 12 + (src.count / maxCount) * 22;
+        tag.style.fontSize = size.toFixed(1) + 'px';
+        tag.title = `${src.count} מופעים${src.recognized ? '' : ' — לא מזוהה'}`;
+        if (!src.recognized) tag.style.opacity = '0.6';
+        el.appendChild(tag);
+    });
+}
+
+function renderBiblioRelations(r){
+    const tbody = document.getElementById('biblioRelationsBody');
+    tbody.innerHTML = '';
+    if (!r.relations.length) {
+        tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--text-3)">אין מספיק מקורות חופפים באותה פסקה כדי להציג קשרים</td></tr>`;
+        return;
+    }
+    r.relations.forEach(rel => {
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${escapeHtml(rel.sourceA)}</td><td>${escapeHtml(rel.sourceB)}</td><td><strong>${rel.count}</strong></td></tr>`);
+    });
+}
+
+// ── מעבר בין טאבים (סטטיסטיקה / ענן / קשרים) ─────────────────────────
+document.querySelectorAll('input[name="biblioTab"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+        const val = radio.value;
+        document.getElementById('biblioTabStats').style.display = val === 'stats' ? '' : 'none';
+        document.getElementById('biblioTabCloud').style.display = val === 'cloud' ? '' : 'none';
+        document.getElementById('biblioTabRelations').style.display = val === 'relations' ? '' : 'none';
+    });
+});
+
+// ── הורדות ────────────────────────────────────────────────────────────
+document.getElementById('biblioDownloadTxt')?.addEventListener('click', () => {
+    const txt = document.getElementById('biblioText').value;
+    const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'טקסט_מתוקן.txt';
+    a.click();
+});
+
+document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
+    if (!biblioReport) return;
+    const rows = [['מקור', 'מופעים', 'מיקומים', 'זוהה', 'צורות כתיב שנמצאו']];
+    biblioReport.sources.forEach(s => {
+        rows.push([s.canonical, s.count, s.chapters.join(' | '), s.recognized ? 'כן' : 'לא', s.variantsSeen.join(' | ')]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ניתוח_ביבליוגרפי.csv';
+    a.click();
+});
