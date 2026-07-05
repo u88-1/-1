@@ -168,6 +168,7 @@
                     <div class="panel-title" style="justify-content:space-between;display:flex;align-items:center">
                         <div style="display:flex;align-items:center;gap:10px"><div class="panel-icon">📊</div>תוצאות הניתוח</div>
                         <div style="display:flex;gap:8px">
+                            <button class="browse-btn" id="biblioVerifyBtn" title="בדוק מול מסד הנתונים בפועל אילו מקורות אכן קיימים">🔍 אימות מול המאגר</button>
                             <button class="browse-btn" id="biblioDownloadCsv" title="הורד טבלת מקורות כ-CSV">⬇️ CSV</button>
                             <button class="browse-btn" id="biblioDownloadTxt" title="הורד את הטקסט (לאחר תיקוני שם אם בוצעו)">💾 טקסט מתוקן</button>
                         </div>
@@ -186,6 +187,7 @@
                                     <th style="width:70px">מופעים</th>
                                     <th style="width:160px">מיקומים</th>
                                     <th style="width:70px">זוהה?</th>
+                                    <th style="width:90px">במאגר?</th>
                                 </tr></thead>
                                 <tbody id="biblioStatsBody"></tbody>
                             </table>

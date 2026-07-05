@@ -807,6 +807,7 @@ loadSettingsUI();
 //  ניתוח ביבליוגרפי — סטטיסטיקה, ענן מקורות, קורלציות (v1)
 // ════════════════════════════════════════════════════════════════════════
 let biblioReport = null;
+let biblioVerifyResults = null; // Map: displayName -> true/false (מאומת מול ה-DB בפועל, לא רק "מזוהה")
 
 document.getElementById('biblioFileInput')?.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -839,6 +840,7 @@ document.getElementById('biblioRunBtn')?.addEventListener('click', async () => {
     resultsEl.style.display='none';
     try {
         biblioReport = await invoke('analyze_bibliography', { text, brackets: getBiblioBrackets() });
+        biblioVerifyResults = null;
         statusEl.style.display='none';
         resultsEl.style.display='block';
         renderBiblioKpis(biblioReport);
@@ -853,14 +855,45 @@ document.getElementById('biblioRunBtn')?.addEventListener('click', async () => {
 
 function renderBiblioKpis(r){
     const el = document.getElementById('biblioKpis');
+    let verifyCard = '';
+    if (biblioVerifyResults) {
+        const notFound = r.sources.filter(s => biblioVerifyResults[s.displayName] === false).length;
+        verifyCard = `<div class="stat-card ${notFound>0?'s-missing':'s-found'}"><div class="stat-num">${notFound}</div><div class="stat-label">לא נמצאו במאגר</div></div>`;
+    }
     el.innerHTML = `
         <div class="stat-card"><div class="stat-num">${r.totalCitations}</div><div class="stat-label">סך ציטוטים</div></div>
         <div class="stat-card s-found"><div class="stat-num">${r.uniqueSources}</div><div class="stat-label">מקורות ייחודיים</div></div>
         <div class="stat-card"><div class="stat-num">${r.paragraphsScanned}</div><div class="stat-label">פסקאות נסרקו</div></div>
         <div class="stat-card ${r.unrecognizedCount>0?'s-missing':''}"><div class="stat-num">${r.unrecognizedCount}</div><div class="stat-label">מקורות לא מזוהים</div></div>
         <div class="stat-card"><div class="stat-num">${r.diversityPct.toFixed(0)}%</div><div class="stat-label">גיוון ביבליוגרפי</div></div>
+        ${verifyCard}
     `;
 }
+
+/// אימות אמיתי מול ה-DB: לכל מקור ייחודי, בודקים אם קיימת שורה תואמת
+/// בפועל (לא רק אם שם המסכת "מוכר" כמו is_recognized). זה ה"שדרוג"
+/// שהוסכם - חיבור הניתוח הביבליוגרפי לתוצאות חיפוש אמיתיות.
+document.getElementById('biblioVerifyBtn')?.addEventListener('click', async () => {
+    if (!biblioReport) return;
+    const btn = document.getElementById('biblioVerifyBtn');
+    const orig = btn.textContent;
+    btn.textContent = '⏳ בודק מול המאגר...';
+    btn.disabled = true;
+    try {
+        const dbPath = document.getElementById('dbPath')?.value.trim() || settings?.defaultDb || '';
+        const refs = biblioReport.sources.map(s => s.displayName);
+        biblioVerifyResults = await invoke('verify_biblio_sources', { refs, dbPath: dbPath || null });
+        renderBiblioKpis(biblioReport);
+        renderBiblioStats(biblioReport);
+    } catch(err) {
+        const statusEl = document.getElementById('biblioStatus');
+        statusEl.style.display='block'; statusEl.className='status-bar error';
+        statusEl.textContent = 'שגיאת אימות: ' + err;
+    } finally {
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
+});
 
 function renderBiblioStats(r){
     const tbody = document.getElementById('biblioStatsBody');
@@ -883,7 +916,14 @@ function renderBiblioStats(r){
         const tdRec = document.createElement('td');
         tdRec.innerHTML = src.recognized ? '✓' : '<span class="biblio-unrecognized">✗</span>';
 
-        tr.append(tdName, tdCount, tdLocs, tdRec);
+        const tdVerify = document.createElement('td');
+        if (biblioVerifyResults && Object.prototype.hasOwnProperty.call(biblioVerifyResults, src.displayName)) {
+            tdVerify.innerHTML = biblioVerifyResults[src.displayName] ? '✓' : '<span class="biblio-unrecognized">✗</span>';
+        } else {
+            tdVerify.innerHTML = '<span class="biblio-chapters">—</span>';
+        }
+
+        tr.append(tdName, tdCount, tdLocs, tdRec, tdVerify);
         tbody.appendChild(tr);
 
         // שורת פרטים (מוסתרת כברירת מחדל) — כל מופע עם ההקשר שלו ואפשרות עריכה
@@ -891,7 +931,7 @@ function renderBiblioStats(r){
         detailTr.style.display = 'none';
         detailTr.className = 'biblio-detail-row';
         const detailTd = document.createElement('td');
-        detailTd.colSpan = 4;
+        detailTd.colSpan = 5;
         detailTd.appendChild(buildOccurrencesPanel(src, idx));
         detailTr.appendChild(detailTd);
         tbody.appendChild(detailTr);

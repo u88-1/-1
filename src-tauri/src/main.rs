@@ -351,8 +351,33 @@ fn normalize_talmud_page(input: &str) -> String {
 }
 
 /// פיתוח קיצור מסכת בתחילת ההפניה (אם זוהה). מחזיר וריאנט/ים.
+// תלמוד ירושלמי — הפניות בפורמט "ירושלמי X..." לא זוהו עד כה כלל, כי
+// כל הרג'קסים ב-ABBREV_RES דורשים שהמסכת תהיה *בתחילת* המחרוזת בדיוק.
+// "ירושלמי ברכות" לא תואם אף רג'קס (כי "ברכות" לא נמצא בתחילת המחרוזת),
+// ולכן שם המסכת בתוכה עדיין נפל למלכודת גימטריה (כמו הבאג עם "חולין").
+static RE_YERUSHALMI: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(ירושלמי|ירוש['׳]|יר['׳])\s+").unwrap());
+
+/// אם ההפניה פותחת ב"ירושלמי"/קיצוריו — מסיר את הקידומת, מריץ את הפעולה
+/// על השארית (שם המסכת + מיקום), ומחזיר את "ירושלמי" (בצורתו המלאה,
+/// מנורמלת) בחזרה כקידומת. כך גם תלמוד ירושלמי מקבל את אותה הגנה
+/// שכבר יש לבבלי, ובנוסף — מפתח הקיבוץ הקנוני שלו תמיד יישאר מובחן
+/// מהמסכת המקבילה בבבלי (לא יתמזגו לאותו "מקור" בניתוח הביבליוגרפי).
+fn strip_yerushalmi_prefix(v: &str) -> Option<&str> {
+    RE_YERUSHALMI.find(v).map(|m| v[m.end()..].trim_start())
+}
+
 fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
     let trimmed = input.trim();
+    if let Some(rest) = strip_yerushalmi_prefix(trimmed) {
+        if rest.is_empty() {
+            return vec!["ירושלמי".to_string()];
+        }
+        return expand_tractate_abbreviations(rest)
+            .into_iter()
+            .map(|e| format!("ירושלמי {}", e))
+            .collect();
+    }
     for (re, target) in ABBREV_RES.iter() {
         if re.is_match(trimmed).unwrap_or(false) {
             let replaced = fre_replace_all(re, trimmed, |_| target.clone());
@@ -373,7 +398,16 @@ static RE_HILCHOT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^הלכות\s+[א-ת]+(?:\s+[א-ת]+)?").unwrap());
 
 fn safe_replace_hebrew_numbers(v: &str) -> String {
-    // הגנה על "הלכות X" (רמב"ם) — נבדק ראשון כי אינו ברשימת ABBREV_RES.
+    // הגנה על "ירושלמי X" — נבדק ראשון: מגינים על המילה עצמה ומריצים
+    // את שאר העיבוד (הגנת מסכת + גימטריה) רקורסיבית על השארית, כדי
+    // ששם המסכת שאחרי "ירושלמי" יזכה לאותה הגנה שיש למסכתות בבלי.
+    if let Some(rest) = strip_yerushalmi_prefix(v) {
+        if rest.is_empty() {
+            return "ירושלמי".to_string();
+        }
+        return format!("ירושלמי {}", safe_replace_hebrew_numbers(rest));
+    }
+    // הגנה על "הלכות X" (רמב"ם) — נבדק שני כי אינו ברשימת ABBREV_RES.
     if let Some(m) = RE_HILCHOT.find(v) {
         let head = m.as_str();
         let rest = v[m.end()..].trim_start();
@@ -626,6 +660,7 @@ fn canonical_key(reference: &str) -> String {
 /// מקור "לא מזוהה" עשוי להעיד על שגיאת כתיב או ספר שהמערכת עדיין לא מכירה.
 fn is_recognized_source(reference: &str) -> bool {
     let base = normalize_ref(reference);
+    let base = strip_yerushalmi_prefix(&base).map(|s| s.to_string()).unwrap_or(base);
     ABBREV_RES.iter().any(|(re, _)| re.is_match(&base).unwrap_or(false))
 }
 
@@ -894,6 +929,44 @@ fn edit_biblio_context(
     result.push_str(&text[..context_start]);
     result.push_str(&new_text);
     result.push_str(&text[context_end..]);
+    Ok(result)
+}
+
+/// אימות מהיר מול מסד הנתונים: לכל הפניה ייחודית מהניתוח הביבליוגרפי,
+/// בודקים אם קיימת שורה תואמת בפועל ב-DB (התאמה מדויקת בלבד — ללא
+/// fuzzy/Sefaria, כדי לשמור על מהירות עבור עשרות/מאות מקורות בבת אחת).
+/// זהו "שדרוג" מעל is_recognized (שרק בודק אם שם המסכת מוכר) - כאן
+/// באמת שואלים את המאגר "האם ההפניה הזו קיימת".
+#[tauri::command]
+fn verify_biblio_sources(
+    refs: Vec<String>,
+    db_path: Option<String>,
+) -> Result<HashMap<String, bool>, String> {
+    let resolved_db = db_path
+        .as_deref()
+        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+    let opendb = open_db(&resolved_db)?;
+    let s = &opendb.schema;
+    let base = select_prefix(s);
+
+    let mut result: HashMap<String, bool> = HashMap::new();
+    for r in refs {
+        let normalized = normalize_ref(&r);
+        let variants = generate_variants(&normalized);
+        if variants.is_empty() {
+            result.insert(r, false);
+            continue;
+        }
+        let sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
+        let mut seen: HashSet<i64> = HashSet::new();
+        let mut out: Vec<RowOut> = Vec::new();
+        let found = collect_batch(&opendb.conn, &sql, &variants, "exact", &mut seen, &mut out)
+            .map(|_| !out.is_empty())
+            .unwrap_or(false);
+        result.insert(r, found);
+    }
     Ok(result)
 }
 
@@ -2515,7 +2588,8 @@ fn main() {
             build_ref_index,
             check_ref_index,
             analyze_bibliography,
-            edit_biblio_context
+            edit_biblio_context,
+            verify_biblio_sources
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
