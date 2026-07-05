@@ -607,7 +607,9 @@ static RE_CHAPTER_MARK: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// מפתח קיבוץ קנוני להפניה — מריץ את אותו צינור נרמול המשמש לחיפוש,
-/// כדי שוריאציות כתיבה שונות של אותו מקור יתקבצו יחד.
+/// כדי שוריאציות כתיבה שונות של אותו מקור יתקבצו יחד. שימו לב: זהו
+/// מפתח *פנימי* בלבד (כולל המרת מספרים לספרות) — לעולם לא מוצג למשתמש
+/// ישירות; לתצוגה יש להשתמש ב-display_name (הצורה כפי שנכתבה בפועל).
 fn canonical_key(reference: &str) -> String {
     let base = normalize_ref(reference);
     let base = RE_DAF.replace_all(&base, "").trim().to_string();
@@ -627,21 +629,70 @@ fn is_recognized_source(reference: &str) -> bool {
     ABBREV_RES.iter().any(|(re, _)| re.is_match(&base).unwrap_or(false))
 }
 
+/// הרחבת חלון הקשר סביב הפניה כך שלא ייחתך באמצע מילה — מרחיבים
+/// (ולא חותכים) שמאלה/ימינה עד לרווח לבן הקרוב. עובד על byte offsets
+/// תקינים של Rust/UTF-8 בלבד; האופסטים האלה לעולם לא מתפרשים ב-JS
+/// כאינדקסים למחרוזת (שם הקידוד שונה - UTF-16) - הם רק "מוחזרים" ל-Rust
+/// בשלמותם בבקשת עריכה, כדי למנוע בדיוק את סוג הבאג שהיה בסקיצה
+/// המקורית (הנחת חלון קבוע של ±100 תווים, ללא בדיקת גבולות/חפיפות).
+const BIBLIO_CONTEXT_RADIUS: usize = 90;
+
+fn snap_context(text: &str, match_start: usize, match_end: usize, radius: usize) -> (usize, usize) {
+    let len = text.len();
+    let mut cs = match_start.saturating_sub(radius);
+    while cs > 0 && !text.is_char_boundary(cs) {
+        cs -= 1;
+    }
+    let mut ce = (match_end + radius).min(len);
+    while ce < len && !text.is_char_boundary(ce) {
+        ce += 1;
+    }
+    while cs > 0 {
+        match text[..cs].chars().last() {
+            Some(prev) if !prev.is_whitespace() => cs -= prev.len_utf8(),
+            _ => break,
+        }
+    }
+    while ce < len {
+        match text[ce..].chars().next() {
+            Some(next) if !next.is_whitespace() => ce += next.len_utf8(),
+            _ => break,
+        }
+    }
+    (cs, ce)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BiblioOccurrence {
+    /// אטום ל-Frontend: לא מתפרש כאינדקס מחרוזת שם, רק מוחזר ל-edit_biblio_context
+    context_start: usize,
+    context_end: usize,
+    context_before: String,
+    matched_text: String,
+    context_after: String,
+    paragraph_index: usize,
+    chapter: String,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct BiblioSource {
+    /// מפתח קיבוץ פנימי בלבד — לא להצגה למשתמש
     canonical: String,
+    /// הצורה כפי שנכתבה בפועל בטקסט (הראשונה שנמצאה) — זו שיש להציג למשתמש
     display_name: String,
     variants_seen: Vec<String>,
     count: i64,
     chapters: Vec<String>,
     recognized: bool,
-    paragraph_indices: Vec<usize>,
+    occurrences: Vec<BiblioOccurrence>,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct BiblioRelation {
+    /// שמות תצוגה (לא מפתחות קנוניים) — מוכנים להצגה ישירה בטבלה
     source_a: String,
     source_b: String,
     count: i64,
@@ -665,7 +716,7 @@ struct SrcAgg {
     count: i64,
     chapters: HashSet<String>,
     recognized: bool,
-    paragraph_indices: Vec<usize>,
+    occurrences: Vec<BiblioOccurrence>,
 }
 
 static RE_PARA_SPLIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n\s*\n").unwrap());
@@ -678,60 +729,77 @@ fn analyze_bibliography(text: String, brackets: Option<String>) -> Result<Biblio
     let ec = regex_escape(&close.to_string());
     let ref_re = Regex::new(&format!("{}([^{}]+){}", eo, ec, ec)).map_err(|e| e.to_string())?;
 
-    // אם אין כלל שורות ריקות מפרידות (טקסט שחולץ מ-PDF/docx לעיתים מגיע כך),
-    // נופלים חזרה לפיצול לפי שורה בודדת כדי לא לאבד את כל מבנה הפסקאות.
-    let mut paragraphs: Vec<&str> = RE_PARA_SPLIT.split(&text).collect();
-    if paragraphs.len() <= 1 {
-        paragraphs = text.lines().collect();
+    // גבולות פסקאות (byte offsets) — לקיבוץ קורלציה ולספירת "פסקאות נסרקו".
+    // אם הטקסט הגיע ללא שורות ריקות מפרידות (כפי שקורה לעיתים בחילוץ
+    // מ-PDF/docx), נופלים חזרה לגבולות שורה בודדת.
+    let mut para_breaks: Vec<usize> = RE_PARA_SPLIT.find_iter(&text).map(|m| m.start()).collect();
+    if para_breaks.is_empty() {
+        para_breaks = text.match_indices('\n').map(|(i, _)| i).collect();
     }
+    let paragraphs_scanned = para_breaks.len() as i64 + 1;
+    let paragraph_index_of = |offset: usize| -> usize { para_breaks.partition_point(|&b| b < offset) };
+
+    // סימוני פרק/סימן/חלק/הלכות עם המיקום שלהם — לצורך תיוג "מיקום" לכל הפניה
+    let chapter_marks: Vec<(usize, String)> = RE_CHAPTER_MARK
+        .find_iter(&text)
+        .map(|m| (m.start(), m.as_str().trim().to_string()))
+        .collect();
+    let chapter_at = |offset: usize| -> String {
+        match chapter_marks.partition_point(|(s, _)| *s <= offset) {
+            0 => "פתיחה / תחילת המסמך".to_string(),
+            n => chapter_marks[n - 1].1.clone(),
+        }
+    };
 
     let mut sources: HashMap<String, SrcAgg> = HashMap::new();
-    let mut correlation: HashMap<(String, String), i64> = HashMap::new();
-    let mut current_chapter = "פתיחה / תחילת המסמך".to_string();
+    let mut para_sets: HashMap<usize, HashSet<(String, String)>> = HashMap::new();
     let mut total_citations: i64 = 0;
 
-    for (pidx, para) in paragraphs.iter().enumerate() {
-        if let Some(m) = RE_CHAPTER_MARK.find(para) {
-            current_chapter = m.as_str().trim().to_string();
+    for cap in ref_re.captures_iter(&text) {
+        let whole = cap.get(0).unwrap();
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("").trim();
+        if raw.is_empty() {
+            continue;
         }
-
-        let mut in_paragraph: HashSet<String> = HashSet::new();
-        for cap in ref_re.captures_iter(para) {
-            let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("").trim();
-            if raw.is_empty() {
-                continue;
-            }
-            let key = canonical_key(raw);
-            if key.is_empty() {
-                continue;
-            }
-            total_citations += 1;
-            in_paragraph.insert(key.clone());
-
-            let entry = sources.entry(key).or_insert_with(|| SrcAgg {
-                display_name: raw.to_string(),
-                variants_seen: HashSet::new(),
-                count: 0,
-                chapters: HashSet::new(),
-                recognized: is_recognized_source(raw),
-                paragraph_indices: Vec::new(),
-            });
-            entry.count += 1;
-            entry.variants_seen.insert(raw.to_string());
-            entry.chapters.insert(current_chapter.clone());
-            entry.paragraph_indices.push(pidx);
+        let key = canonical_key(raw);
+        if key.is_empty() {
+            continue;
         }
+        total_citations += 1;
 
-        // קורלציה — כל זוג מקורות קנוניים שהופיעו יחד באותה פסקה
-        let list: Vec<&String> = in_paragraph.iter().collect();
-        for i in 0..list.len() {
-            for j in (i + 1)..list.len() {
-                let mut pair = [list[i].clone(), list[j].clone()];
-                pair.sort();
-                let key = (pair[0].clone(), pair[1].clone());
-                *correlation.entry(key).or_insert(0) += 1;
-            }
-        }
+        let match_start = whole.start();
+        let match_end = whole.end();
+        let p_idx = paragraph_index_of(match_start);
+        let chapter = chapter_at(match_start);
+        let (cs, ce) = snap_context(&text, match_start, match_end, BIBLIO_CONTEXT_RADIUS);
+
+        let occ = BiblioOccurrence {
+            context_start: cs,
+            context_end: ce,
+            context_before: text[cs..match_start].to_string(),
+            matched_text: text[match_start..match_end].to_string(),
+            context_after: text[match_end..ce].to_string(),
+            paragraph_index: p_idx,
+            chapter: chapter.clone(),
+        };
+
+        para_sets
+            .entry(p_idx)
+            .or_default()
+            .insert((key.clone(), raw.to_string()));
+
+        let entry = sources.entry(key).or_insert_with(|| SrcAgg {
+            display_name: raw.to_string(),
+            variants_seen: HashSet::new(),
+            count: 0,
+            chapters: HashSet::new(),
+            recognized: is_recognized_source(raw),
+            occurrences: Vec::new(),
+        });
+        entry.count += 1;
+        entry.variants_seen.insert(raw.to_string());
+        entry.chapters.insert(chapter);
+        entry.occurrences.push(occ);
     }
 
     if total_citations == 0 {
@@ -745,6 +813,29 @@ fn analyze_bibliography(text: String, brackets: Option<String>) -> Result<Biblio
     let unrecognized_count = sources.values().filter(|s| !s.recognized).count() as i64;
     let diversity_pct = (unique_count as f64 / total_citations as f64) * 100.0;
 
+    // מפת canonical → display_name לצורך תרגום זוגות הקורלציה לשמות קריאים
+    let display_of: HashMap<String, String> = sources
+        .iter()
+        .map(|(k, v)| (k.clone(), v.display_name.clone()))
+        .collect();
+
+    let mut correlation: HashMap<(String, String), i64> = HashMap::new();
+    for set in para_sets.values() {
+        let list: Vec<&(String, String)> = set.iter().collect();
+        for i in 0..list.len() {
+            for j in (i + 1)..list.len() {
+                let (ka, _) = &list[i];
+                let (kb, _) = &list[j];
+                if ka == kb {
+                    continue;
+                }
+                let mut pair = [ka.clone(), kb.clone()];
+                pair.sort();
+                *correlation.entry((pair[0].clone(), pair[1].clone())).or_insert(0) += 1;
+            }
+        }
+    }
+
     let mut source_list: Vec<BiblioSource> = sources
         .into_iter()
         .map(|(canonical, agg)| BiblioSource {
@@ -754,26 +845,56 @@ fn analyze_bibliography(text: String, brackets: Option<String>) -> Result<Biblio
             count: agg.count,
             chapters: agg.chapters.into_iter().collect(),
             recognized: agg.recognized,
-            paragraph_indices: agg.paragraph_indices,
+            occurrences: agg.occurrences,
         })
         .collect();
     source_list.sort_by(|a, b| b.count.cmp(&a.count));
 
     let mut relations: Vec<BiblioRelation> = correlation
         .into_iter()
-        .map(|((source_a, source_b), count)| BiblioRelation { source_a, source_b, count })
+        .map(|((ka, kb), count)| BiblioRelation {
+            source_a: display_of.get(&ka).cloned().unwrap_or(ka),
+            source_b: display_of.get(&kb).cloned().unwrap_or(kb),
+            count,
+        })
         .collect();
     relations.sort_by(|a, b| b.count.cmp(&a.count));
 
     Ok(BiblioReport {
         total_citations,
         unique_sources: unique_count,
-        paragraphs_scanned: paragraphs.len() as i64,
+        paragraphs_scanned,
         diversity_pct,
         unrecognized_count,
         sources: source_list,
         relations,
     })
+}
+
+/// עריכה בטוחה של קטע הקשר סביב הפניה בודדת. מחליף בדיוק את הטווח
+/// [context_start, context_end) (byte offsets שחושבו ע"י analyze_bibliography
+/// עבור *אותו* טקסט בדיוק) בטקסט החדש שהמשתמש ערך. הגנה כפולה: בדיקת
+/// גבולות תו UTF-8 תקינים ובדיקת התאמת אורך הטקסט — אם הטקסט השתנה מאז
+/// הניתוח האחרון (offsets לא תקפים יותר) מוחזרת שגיאה ברורה במקום עריכה
+/// שגויה/חופפת, בניגוד לסקיצה המקורית שהניחה חלון קבוע של ±100 תווים.
+#[tauri::command]
+fn edit_biblio_context(
+    text: String,
+    context_start: usize,
+    context_end: usize,
+    new_text: String,
+) -> Result<String, String> {
+    if context_start > context_end || context_end > text.len() {
+        return Err("הטווח שנשלח אינו תואם את הטקסט הנוכחי — הרץ ניתוח מחדש ונסה שוב".to_string());
+    }
+    if !text.is_char_boundary(context_start) || !text.is_char_boundary(context_end) {
+        return Err("הטקסט השתנה מאז הניתוח האחרון — הרץ ניתוח מחדש לפני עריכה".to_string());
+    }
+    let mut result = String::with_capacity(text.len() + new_text.len());
+    result.push_str(&text[..context_start]);
+    result.push_str(&new_text);
+    result.push_str(&text[context_end..]);
+    Ok(result)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2393,7 +2514,8 @@ fn main() {
             open_in_otzaria,
             build_ref_index,
             check_ref_index,
-            analyze_bibliography
+            analyze_bibliography,
+            edit_biblio_context
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};

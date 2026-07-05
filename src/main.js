@@ -865,14 +865,13 @@ function renderBiblioKpis(r){
 function renderBiblioStats(r){
     const tbody = document.getElementById('biblioStatsBody');
     tbody.innerHTML = '';
-    r.sources.forEach(src => {
+    r.sources.forEach((src, idx) => {
         const tr = document.createElement('tr');
+        tr.className = 'biblio-name-cell';
 
         const tdName = document.createElement('td');
-        tdName.className = 'biblio-name-cell';
         const variantsHint = src.variantsSeen.length > 1 ? ` <span class="biblio-chapters">(${src.variantsSeen.length} צורות כתיב)</span>` : '';
-        tdName.innerHTML = `${escapeHtml(src.canonical)} ✏️${variantsHint}`;
-        tdName.addEventListener('click', () => enableBiblioEdit(tdName, src));
+        tdName.innerHTML = `<span class="biblio-toggle-name">▸ ${escapeHtml(src.displayName)}</span>${variantsHint} <button class="biblio-mini-btn" data-biblio-edit="${idx}">✏️ שנה שם</button>`;
 
         const tdCount = document.createElement('td');
         tdCount.textContent = src.count;
@@ -886,6 +885,90 @@ function renderBiblioStats(r){
 
         tr.append(tdName, tdCount, tdLocs, tdRec);
         tbody.appendChild(tr);
+
+        // שורת פרטים (מוסתרת כברירת מחדל) — כל מופע עם ההקשר שלו ואפשרות עריכה
+        const detailTr = document.createElement('tr');
+        detailTr.style.display = 'none';
+        detailTr.className = 'biblio-detail-row';
+        const detailTd = document.createElement('td');
+        detailTd.colSpan = 4;
+        detailTd.appendChild(buildOccurrencesPanel(src, idx));
+        detailTr.appendChild(detailTd);
+        tbody.appendChild(detailTr);
+
+        tdName.querySelector('.biblio-toggle-name').addEventListener('click', () => {
+            const isOpen = detailTr.style.display !== 'none';
+            detailTr.style.display = isOpen ? 'none' : '';
+            tdName.querySelector('.biblio-toggle-name').textContent = (isOpen ? '▸ ' : '▾ ') + src.displayName;
+        });
+        tdName.querySelector('[data-biblio-edit]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            enableBiblioEdit(tdName, src);
+        });
+    });
+}
+
+/// בונה את פאנל המופעים (הקשר + עריכה) עבור מקור בודד — בהשראת הסקיצה
+/// שהועברה, אך עם תיקון הבאג המרכזי שלה: כל מופע נושא context_start/
+/// context_end מדויקים שחושבו ב-Rust (לא הנחת חלון קבוע של ±100 תווים),
+/// כך שעריכה אף פעם לא דורסת טקסט של מופע סמוך.
+function buildOccurrencesPanel(src, srcIdx){
+    const wrap = document.createElement('div');
+    wrap.className = 'biblio-occurrences';
+    src.occurrences.forEach((occ, occIdx) => {
+        const box = document.createElement('div');
+        box.className = 'biblio-occ-box';
+        box.innerHTML = `
+            <div class="biblio-occ-meta">${escapeHtml(occ.chapter)}</div>
+            <div class="biblio-occ-text" data-occ-view="${srcIdx}-${occIdx}">…${escapeHtml(occ.contextBefore)}<mark>${escapeHtml(occ.matchedText)}</mark>${escapeHtml(occ.contextAfter)}…</div>
+            <div class="biblio-occ-actions">
+                <button class="biblio-mini-btn" data-occ-edit="${srcIdx}-${occIdx}">✏️ ערוך הקשר זה</button>
+            </div>
+        `;
+        wrap.appendChild(box);
+        box.querySelector('[data-occ-edit]').addEventListener('click', () => enableOccurrenceEdit(box, occ));
+    });
+    return wrap;
+}
+
+function enableOccurrenceEdit(box, occ){
+    const combined = occ.contextBefore + occ.matchedText + occ.contextAfter;
+    const viewEl = box.querySelector('.biblio-occ-text');
+    const actionsEl = box.querySelector('.biblio-occ-actions');
+    viewEl.style.display = 'none';
+    actionsEl.style.display = 'none';
+    const editBox = document.createElement('div');
+    editBox.className = 'biblio-edit-row';
+    editBox.innerHTML = `
+        <textarea class="biblio-occ-editarea">${escapeHtml(combined)}</textarea>
+        <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="biblio-mini-btn primary" data-occ-save>שמור</button>
+            <button class="biblio-mini-btn" data-occ-cancel>בטל</button>
+        </div>
+    `;
+    box.appendChild(editBox);
+    editBox.querySelector('[data-occ-cancel]').addEventListener('click', () => {
+        editBox.remove();
+        viewEl.style.display = '';
+        actionsEl.style.display = '';
+    });
+    editBox.querySelector('[data-occ-save]').addEventListener('click', async () => {
+        const newText = editBox.querySelector('textarea').value;
+        const statusEl = document.getElementById('biblioStatus');
+        try {
+            const fullText = document.getElementById('biblioText').value;
+            const updated = await invoke('edit_biblio_context', {
+                text: fullText,
+                contextStart: occ.contextStart,
+                contextEnd: occ.contextEnd,
+                newText,
+            });
+            document.getElementById('biblioText').value = updated;
+            document.getElementById('biblioRunBtn').click();
+        } catch(err) {
+            statusEl.style.display='block'; statusEl.className='status-bar error';
+            statusEl.textContent = 'שגיאת עריכה: ' + err + ' — כנראה הטקסט השתנה. הרץ ניתוח מחדש ונסה שוב.';
+        }
     });
 }
 
@@ -894,14 +977,18 @@ function escapeHtml(s){
 }
 
 function enableBiblioEdit(td, src){
-    td.onclick = null;
-    td.innerHTML = `
-        <div class="biblio-edit-row">
-            <input type="text" value="${escapeHtml(src.displayName)}" id="biblioEditInput" />
-            <button class="biblio-mini-btn primary" id="biblioEditSave">שמור בכל הצורות</button>
-            <button class="biblio-mini-btn" id="biblioEditCancel">בטל</button>
-        </div>
+    const nameSpan = td.querySelector('.biblio-toggle-name');
+    const editBtn = td.querySelector('[data-biblio-edit]');
+    nameSpan.style.display = 'none';
+    editBtn.style.display = 'none';
+    const row = document.createElement('div');
+    row.className = 'biblio-edit-row';
+    row.innerHTML = `
+        <input type="text" value="${escapeHtml(src.displayName)}" id="biblioEditInput" />
+        <button class="biblio-mini-btn primary" id="biblioEditSave">שמור בכל הצורות</button>
+        <button class="biblio-mini-btn" id="biblioEditCancel">בטל</button>
     `;
+    td.appendChild(row);
     document.getElementById('biblioEditInput').focus();
     document.getElementById('biblioEditCancel').addEventListener('click', () => renderBiblioStats(biblioReport));
     document.getElementById('biblioEditSave').addEventListener('click', () => saveBiblioRename(src));
@@ -933,7 +1020,7 @@ function renderBiblioCloud(r){
     r.sources.forEach(src => {
         const tag = document.createElement('span');
         tag.className = 'cloud-tag';
-        tag.textContent = src.canonical;
+        tag.textContent = src.displayName;
         const size = 12 + (src.count / maxCount) * 22;
         tag.style.fontSize = size.toFixed(1) + 'px';
         tag.title = `${src.count} מופעים${src.recognized ? '' : ' — לא מזוהה'}`;
