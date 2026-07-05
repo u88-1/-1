@@ -350,6 +350,17 @@ fn normalize_talmud_page(input: &str) -> String {
     })
 }
 
+/// גרסה חלופית לנרמול עמוד גמרא — שומרת את מספר הדף *כפי שנכתב* (אותיות
+/// עבריות, בלי המרה לספרות), ומחליפה רק את סימון העמוד ("עמוד ב"/"ע\"ב")
+/// בפסיק ואות בודדת (א/ב). קיימת כי יש עדות (ציטוט "חולין קכא, ב" נמצא
+/// בהצלחה עוד לפני כל תיקוני הגימטריה) שמאגר אוצריא כנראה שומר חלק
+/// מהפניות הדף/עמוד באותיות עבריות במקור ("קכא, ב"), לא כספרות — כך
+/// שהמרה לספרות בלבד (normalize_talmud_page) עלולה לפספס את ההתאמה.
+fn normalize_talmud_page_letters(input: &str) -> String {
+    let s = fre_replace_all(&RE_PAGE_A, input, |c| format!("{}, א", cap_str(c, 1)));
+    fre_replace_all(&RE_PAGE_B, &s, |c| format!("{}, ב", cap_str(c, 1)))
+}
+
 /// פיתוח קיצור מסכת בתחילת ההפניה (אם זוהה). מחזיר וריאנט/ים.
 // תלמוד ירושלמי — הפניות בפורמט "ירושלמי X..." לא זוהו עד כה כלל, כי
 // כל הרג'קסים ב-ABBREV_RES דורשים שהמסכת תהיה *בתחילת* המחרוזת בדיוק.
@@ -503,6 +514,13 @@ fn generate_variants(reference: &str) -> Vec<String> {
     if wp != base {
         push(wp, &mut order, &mut seen);
     }
+    // וריאנט חלופי ששומר את מספר הדף באותיות עבריות (לא ממיר לספרות) —
+    // ראו הסבר ב-normalize_talmud_page_letters; מכסה מאגרים ששומרים
+    // ציטוטי דף/עמוד באותיות עבריות במקור.
+    let wpl = normalize_talmud_page_letters(&base);
+    if wpl != base {
+        push(wpl, &mut order, &mut seen);
+    }
 
     // עיבוד גימטריה — עובדים על indices כדי לא לשכפל את ה-Vec
     let mut i = 0;
@@ -532,6 +550,10 @@ fn generate_variants(reference: &str) -> Vec<String> {
                 if epa != ep {
                     push(epa, &mut order, &mut seen);
                 }
+            }
+            let epl = normalize_talmud_page_letters(&e);
+            if epl != e {
+                push(epl, &mut order, &mut seen);
             }
         }
         j += 1;
