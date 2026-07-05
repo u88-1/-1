@@ -1709,7 +1709,7 @@ mark.focus-mark {
 /* ── ניתוח ביבליוגרפי: פאנל מופעים + עריכת הקשר ── */
 .biblio-toggle-name { cursor: pointer; font-weight: 600; }
 .biblio-toggle-name:hover { color: var(--gold); }
-.biblio-detail-row td { background: rgba(0,0,0,0.15); padding: 14px 18px; }
+.biblio-detail-row td { background: var(--gold-dim); padding: 14px 18px; }
 .biblio-occurrences { display: flex; flex-direction: column; gap: 10px; }
 .biblio-occ-box {
     background: var(--gold-dim); border: 1px solid var(--border);
@@ -1723,7 +1723,7 @@ mark.focus-mark {
 }
 .biblio-occ-actions { margin-top: 8px; }
 .biblio-occ-editarea {
-    width: 100%; min-height: 90px; background: rgba(0,0,0,0.25);
+    width: 100%; min-height: 90px; background: var(--panel-bg);
     border: 1.5px solid var(--gold); border-radius: 6px; color: var(--text);
     padding: 8px; font-size: 13px; line-height: 1.7; resize: vertical;
 }

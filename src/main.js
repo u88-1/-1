@@ -723,6 +723,11 @@ document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>{
     saveSettings(ns);settings=ns;
     const saved=document.getElementById('settingsSaved');
     if(saved){saved.style.display='flex';setTimeout(()=>saved.style.display='none',2500);}
+    // רענון תוצאות שכבר מוצגות (אם יש) — כדי שהעימוד/מצב יום ישתקפו מיד
+    // בלי לחייב הרצת השוואה מחדש. בלי זה, ה-DOM נשאר במצב הרינדור
+    // הקודם (למשל: גלילה אינסופית) עד שמשהו אחר יגרום ל-renderResults.
+    currentPage=0;
+    if(typeof sortedCache!=='undefined'&&sortedCache?.length){renderResults();}
 });
 
 // ── האזנה גלובלית מואצלת (delegation) ───────────────

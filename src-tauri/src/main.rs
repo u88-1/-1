@@ -397,6 +397,19 @@ fn expand_tractate_abbreviations(input: &str) -> Vec<String> {
 static RE_HILCHOT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^הלכות\s+[א-ת]+(?:\s+[א-ת]+)?").unwrap());
 
+/// ממיר מספרים עבריים בחלק ה"שארית" של הפניה — אך תמיד מנרמל *קודם*
+/// סימוני דף/עמוד גמרא (RE_PAGE_A/B — "ע"ב", "עמוד ב" וכו') לצורת ':'/'.' .
+/// קריטי: המרת הגימטריה הגנרית (RE_HEBNUM) לא יודעת להבחין בין "ע"ב"
+/// כסימון עמוד (=עמוד ב, לא מספר) לבין רצף אותיות רגיל — לכן בלי הסדר
+/// הזה, "לג, ע"ב" (דף לג עמוד ב) היה מומר ישירות ל"33, 72" (ע=70+ב=2!),
+/// שאילתה שגויה לגמרי שמוצאת לפעמים התאמה חלקית אקראית לגמרי אחרת.
+/// הרצת normalize_talmud_page קודם מבטיחה שסימון העמוד יומר נכון
+/// ל"33:" לפני שהגימטריה הגנרית בכלל רואה את הטקסט.
+fn convert_rest_numbers(rest: &str) -> String {
+    let paged = normalize_talmud_page(rest);
+    replace_hebrew_numbers(&paged)
+}
+
 fn safe_replace_hebrew_numbers(v: &str) -> String {
     // הגנה על "ירושלמי X" — נבדק ראשון: מגינים על המילה עצמה ומריצים
     // את שאר העיבוד (הגנת מסכת + גימטריה) רקורסיבית על השארית, כדי
@@ -414,7 +427,7 @@ fn safe_replace_hebrew_numbers(v: &str) -> String {
         if rest.is_empty() {
             return v.to_string();
         }
-        let rest_converted = replace_hebrew_numbers(rest);
+        let rest_converted = convert_rest_numbers(rest);
         return format!("{} {}", head, rest_converted);
     }
     // בדיקה אם v מתחיל בקיצור/שם מסכת/ספר ידוע — נשתמש ב-ABBREV_RES.
@@ -428,7 +441,7 @@ fn safe_replace_hebrew_numbers(v: &str) -> String {
             if rest.is_empty() {
                 return target.clone(); // רק שם ספר/קיצור, אין מה להמיר
             }
-            let rest_converted = replace_hebrew_numbers(rest);
+            let rest_converted = convert_rest_numbers(rest);
             if rest_converted == rest {
                 return format!("{} {}", target, rest); // עדיין ננרמל את הקיצור לשם המלא
             }
@@ -436,8 +449,8 @@ fn safe_replace_hebrew_numbers(v: &str) -> String {
             return format!("{} {}", target, rest_converted);
         }
     }
-    // לא זוהה שם מסכת/קיצור — מריצים replace_hebrew_numbers רגיל
-    replace_hebrew_numbers(v)
+    // לא זוהה שם מסכת/קיצור — מנרמלים סימוני דף/עמוד קודם, ואז גימטריה גנרית
+    convert_rest_numbers(v)
 }
 
 /// בניית סט וריאנטים לחיפוש (סדר עדיפות נשמר, ללא כפילויות).
