@@ -1120,6 +1120,11 @@ fn tantivy_index_path(db_path: &str) -> std::path::PathBuf {
 
 pub fn build_tantivy_index(db_path: &str) -> Result<(), String> {
     let idx_path = tantivy_index_path(db_path);
+    // קריטי: Index::create_in_dir נכשל בשגיאה ("IndexAlreadyExists") אם כבר
+    // יש meta.json בתיקייה מבנייה קודמת — קורה בכל פעם שלוחצים "בנה אינדקס"
+    // בשנית (למשל אחרי עדכון DB, או סתם לחיצה חוזרת). מוחקים את התיקייה
+    // הישנה במלואה קודם, כדי שכל בנייה תמיד תתחיל מאפס בבטחה.
+    let _ = std::fs::remove_dir_all(&idx_path);
     std::fs::create_dir_all(&idx_path).map_err(|e| e.to_string())?;
 
     // schema — בדיוק כמו בדוגמה הרשמית
