@@ -284,9 +284,9 @@ fn normalize_ref(input: &str) -> String {
 static RE_HEBNUM: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r#"(?<![א-ת])([א-ת׳״"']{1,6})(?![א-ת])"#).unwrap());
 static RE_PAGE_A: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״׳']?א['׳]?"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)[,\s]+ע(?:מוד)?\s*["״׳']?א['׳]?"#).unwrap());
 static RE_PAGE_B: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)\s+ע(?:מוד)?\s*["״׳']?ב['׳]?"#).unwrap());
+    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)[,\s]+ע(?:מוד)?\s*["״׳']?ב['׳]?"#).unwrap());
 // הסרת "דף" לפני מספר/אות — "דף לג" → "לג"
 static RE_DAF: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"דף\s+").unwrap());
@@ -1171,13 +1171,15 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
     let fld_id  = schema.get_field("line_id").unwrap();
     let fld_ref = schema.get_field("he_ref").unwrap();
 
-    let mut qp = QueryParser::for_index(&index, vec![fld_ref]);
-    // דרישת AND בין כל המילים (במקום ברירת המחדל OR) — קריטי: שאילתת prefix
-    // עם כמה מילים ("פאה פרק ה משנה ג*") ב-OR הייתה מתאימה כל שורה שמכילה
-    // *חלק* מהמילים (למשל רק "ה" ו-"ג") ומקבלת ציון גבוה בגלל קוצר השדה,
-    // מה שגרם להתאמות שגויות/הפוכות (למשל "ג, ה" במקום "ה, ג" המבוקש)
-    // להיות מדורגות ראשונות ומסומנות "exact" בטעות.
-    qp.set_conjunction_by_default();
+    let qp = QueryParser::for_index(&index, vec![fld_ref]);
+    // הערה: לא דורשים AND בין כל המילים (ברירת המחדל OR נשארת) - נסיון
+    // קודם לדרוש AND כאן גרם לרגרסיה חמורה: כאשר he_ref מכיל רק את מספר
+    // הדף/פרק (ללא שם המסכת, שנשמר בשדה נפרד book_title), שאילתת AND
+    // נכשלת לגמרי על הפניות תקינות רבות, מה שהוריד drastically את
+    // ה-recall וגם האט את החיפוש (נפילה חוזרת ל-SQL fallback האיטי על
+    // כל הפניה). הדיוק (למנוע תיוג שגוי "exact" על התאמות רופפות)
+    // מובטח כבר ע"י ההשוואה בפועל מול he_ref שנמצא (ראו loose_normalize_
+    // for_compare בקריאה ל-tantivy_search), לא ע"י הגבלת השאילתה עצמה.
     let escaped = variant.replace('"', "");
     let queries = if fuzzy {
         vec![
