@@ -1780,12 +1780,25 @@ fn scan_chunk(
         let mut has_exact = false;
         let mut has_prefix = false;
 
-        // ── שלב 1: Tantivy (אם index קיים) אחרת batch exact ──────────────
-        let used_tantivy = if tantivy_index_exists(db_path) {
-            let mut found_any = false;
-            for v in variants {
+        // ── שלב 1: Tantivy (אם index קיים) — עוצרים אחרי ההתאמה הראשונה
+        // שנמצאה (מהירות, כמו קודם), ובנפרד: תמיד מריצים גם exact-batch SQL
+        // אם עדיין אין exact מאומת. הפרדה זו קריטית: לפני התיקון, פגיעת
+        // Tantivy "fuzzy" בודדת גרמה לשני נזקים -
+        // (1) המשך מעבר על *כל* הוריאנטים (כי רק exact עוצר) - איטי מאוד
+        //     כשיש הרבה וריאנטים (וזה גדל משמעותית מאז תוספות תנ"ך/רמב"ם/
+        //     ירושלמי/שו"ע)
+        // (2) דילוג על בדיקת ה-SQL המדויקת (כי "כבר נעשה שימוש ב-Tantivy")
+        //     גם כאשר Tantivy מצא רק fuzzy - כך התאמה מדויקת אמיתית
+        //     שהייתה ניתנת לאיתור פשוט לא נבדקה כלל.
+        // כאן: עוצרים אחרי כל תוצאה ראשונה (מהיר), אך ה-exact-batch רץ
+        // תמיד בנפרד כרשת ביטחון כשעדיין אין exact מאומת.
+        const TANTIVY_VARIANT_TRY_LIMIT: usize = 8;
+        if tantivy_index_exists(db_path) {
+            for v in variants.iter().take(TANTIVY_VARIANT_TRY_LIMIT) {
                 let ids = tantivy_search(db_path, v, MAX_RESULTS_PER_REF as usize, false);
-                // נרמול קל של הוריאנט הנוכחי להשוואה — פעם אחת מחוץ ללולאה
+                if ids.is_empty() {
+                    continue;
+                }
                 let v_norm = loose_normalize_for_compare(v);
                 for id in ids {
                     if seen.insert(id) {
@@ -1817,22 +1830,23 @@ fn scan_chunk(
                                     });
                                     if mt == "exact" {
                                         has_exact = true;
-                                        found_any = true;
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if has_exact { break; }
+                // עצירה אחרי הוריאנט הראשון שהניב תוצאה כלשהי (מהירות) —
+                // אבל exact-batch SQL עדיין ירוץ בנפרד למטה כרשת ביטחון.
+                break;
             }
-            found_any
-        } else { false };
+        }
 
-        if !used_tantivy && !variants.is_empty() {
+        let out_len_before_batch = out.len();
+        if !has_exact && !variants.is_empty() {
             let batch_sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
             let _ = collect_batch(&opendb.conn, &batch_sql, variants, "exact", &mut seen, &mut out);
-            if !out.is_empty() {
+            if out.len() > out_len_before_batch {
                 has_exact = true;
             }
         }
