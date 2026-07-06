@@ -283,10 +283,17 @@ fn normalize_ref(input: &str) -> String {
 // fancy-regex עבור נרמול מספרים/דפי גמרא/קיצורים (דורש lookaround)
 static RE_HEBNUM: Lazy<FRegex> =
     Lazy::new(|| FRegex::new(r#"(?<![א-ת])([א-ת׳״"']{1,6})(?![א-ת])"#).unwrap());
-static RE_PAGE_A: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)[,\s]+ע(?:מוד)?\s*["״׳']?א['׳]?"#).unwrap());
-static RE_PAGE_B: Lazy<FRegex> =
-    Lazy::new(|| FRegex::new(r#"([א-ת0-9]+)[,\s]+ע(?:מוד)?\s*["״׳']?ב['׳]?"#).unwrap());
+// תומך בכל הצורות לציון עמוד גמרא: "ע\"א/ע'א/עמוד א" (עם ע), אות בודדת
+// "א"/"א'" (בלי ע כלל), או נקודה בודדת. ה-(?![א-ת]) מוודא שהאות היא
+// עמוד בודד ולא תחילת מילה עברית אחרת (כדי לא לתפוס "לג אחרים" למשל).
+static RE_PAGE_A: Lazy<FRegex> = Lazy::new(|| {
+    FRegex::new(r#"([א-ת0-9]+)[,\s]+(?:ע(?:מוד)?\s*["״׳']?א(?![א-ת])['׳]?|א(?![א-ת])['׳]?|\.)"#)
+        .unwrap()
+});
+static RE_PAGE_B: Lazy<FRegex> = Lazy::new(|| {
+    FRegex::new(r#"([א-ת0-9]+)[,\s]+(?:ע(?:מוד)?\s*["״׳']?ב(?![א-ת])['׳]?|ב(?![א-ת])['׳]?|:)"#)
+        .unwrap()
+});
 // הסרת "דף" לפני מספר/אות — "דף לג" → "לג"
 static RE_DAF: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"דף\s+").unwrap());

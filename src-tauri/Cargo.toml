@@ -1,6 +1,6 @@
 [package]
 name = "bodek-mekorot"
-version = "4.2.4"
+version = "4.2.5"
 description = "בודק מקורות — בדיקת הפניות אוטומטית בספרות תורנית"
 authors = ["Otzaria Source Checker contributors"]
 license = "GPL-3.0"
