@@ -75,6 +75,7 @@ function addHistory(e){
 
 // ── מצב יום/לילה ─────────────────────────────────────
 function applyTheme(light){
+    document.documentElement.classList.toggle('light-mode', !!light);
     document.body.classList.toggle('light-mode', !!light);
     const el=document.getElementById('opt-light-mode');
     if(el)el.checked=!!light;

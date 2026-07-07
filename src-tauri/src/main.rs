@@ -1915,8 +1915,13 @@ fn scan_chunk(
         }
 
         // ── שלב 2: prefix per-variant — רק אם אין exact ─────────────────
+        // קריטי: *לא* עוצרים אחרי ההתאמה הראשונה — מנסים את כל הוריאנטים.
+        // וריאנט מוקדם ברשימה (למשל טרם-נורמל) עלול להתאים במקרה להתאמת
+        // prefix שגויה/חלקית; אם היינו עוצרים שם, וריאנט מאוחר יותר ונכון
+        // יותר (כמו הפורמט שאושר מול ה-DB בפועל) לעולם לא היה מנוסה.
+        // המיון לפי איכות בהמשך דואג שהתוצאה הכי טובה תוצג ראשונה בכל מקרה.
         if !has_exact {
-            'variants: for v in variants {
+            for v in variants {
                 let rows_before = out.len();
                 let _ = collect_single_stmt(
                     &mut stmt_prefix,
@@ -1927,9 +1932,6 @@ fn scan_chunk(
                 );
                 if out.len() > rows_before {
                     has_prefix = true;
-                    // early-exit מיידי — תוצאת prefix ראשונה מספיקה
-                    // (וריאנטים נוספים כנראה יתנו את אותן שורות)
-                    break 'variants;
                 }
                 // fuzzy — רק אם אין prefix בכלל ואורך וריאנט מינימלי
                 if !has_prefix && fuzzy && v.chars().count() >= 4 {
@@ -1947,6 +1949,22 @@ fn scan_chunk(
                 }
             }
         }
+
+        // קריטי: ממיינים לפי איכות ההתאמה (exact > prefix > fuzzy) *לפני*
+        // truncate. בלי זה, אם שלב מוקדם (Tantivy) מצא רק fuzzy חלש, ושלב
+        // מאוחר יותר (prefix SQL) מצא בהמשך התאמה טובה בהרבה - התוצאה
+        // הגרועה נשארת ראשונה כי היא הגיעה קודם ל-Vec (סדר הכנסה, לא
+        // איכות) - בדיוק מה שגרם להצגת "מנחות עב" (fuzzy שגוי) במקום
+        // "מנחות לג:" (prefix נכון) שגם הוא נמצא בפועל, סתם מאוחר יותר.
+        let match_rank = |mt: &str| -> u8 {
+            match mt {
+                "exact" => 0,
+                "prefix" => 1,
+                "fuzzy" => 2,
+                _ => 3,
+            }
+        };
+        out.sort_by(|a, b| match_rank(&a.match_type).cmp(&match_rank(&b.match_type)));
 
         out.truncate(MAX_RESULTS_PER_REF as usize);
 

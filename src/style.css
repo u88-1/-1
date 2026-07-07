@@ -57,6 +57,16 @@ html, body {
     -webkit-font-smoothing: antialiased;
 }
 
+/* קריטי: --parch-dark המוגדר בתוך body.light-mode חל רק על צאצאי
+   body, לא על html עצמו (html הוא אב-קדמון, לא צאצא). בלי זה, ה-
+   <html> תמיד נשאר עם הרקע הכהה של :root, וכל פס/שוליים חשופים
+   סביב ה-body (למשל בגלילה, או אם body לא ממלא 100% מדויק) יישארו
+   שחורים גם במצב יום. מוסיפים class זהה גם ל-html כדי שהוא יקבל
+   את אותם משתני עיצוב מנורמלים. */
+html.light-mode {
+    background: #ede8da;
+}
+
 /* Parchment texture background */
 body::before {
     content: '';
