@@ -2742,3 +2742,139 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running בודק מקורות");
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  בדיקות אוטומטיות (unit tests) — מריצים עם `cargo test`.
+//  מטרה: לוודא שהבאגים שנתפסו ותוקנו במהלך העבודה (חולין/מנחות/גיטין
+//  וכו') לא יחזרו בשקט אחרי שינוי עתידי בקוד. כל טסט כאן מתעד את הבאג
+//  המקורי שהוא מגן מפניו.
+// ════════════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── hebrew_to_number: גימטריה בסיסית + הסרת גרשיים ──────────────────
+    #[test]
+    fn hebrew_to_number_basic() {
+        assert_eq!(hebrew_to_number("א"), Some(1));
+        assert_eq!(hebrew_to_number("לג"), Some(33));
+        assert_eq!(hebrew_to_number("קכא"), Some(121));
+    }
+
+    #[test]
+    fn hebrew_to_number_strips_embedded_gershayim() {
+        // "ל"ה" (עם גרשיים באמצע) חייב להתפרש כ-35, לא רק כ-"ה" (5)
+        assert_eq!(hebrew_to_number("ל\"ה"), Some(35));
+        assert_eq!(hebrew_to_number("קכ\"א"), Some(121));
+    }
+
+    // ── safe_replace_hebrew_numbers: הגנת שמות מסכתות/ספרים ──────────────
+    // באג מקורי: "חולין" (5 אותיות, ≤6) הומר בטעות לגימטריה (104) לפני
+    // שהגנת שמות המסכתות נוספה, מה שגרם ל"חולין קכא ע"ב" לא להימצא.
+    #[test]
+    fn safe_replace_protects_tractate_names() {
+        assert_eq!(safe_replace_hebrew_numbers("חולין קכא"), "חולין 121");
+        assert_eq!(safe_replace_hebrew_numbers("יבמות עא"), "יבמות 71");
+        assert_eq!(safe_replace_hebrew_numbers("בבא מציעא ב"), "בבא מציעא 2");
+    }
+
+    // באג מקורי: ספרי תנ"ך לא היו ברשימת ההגנה כלל, "בראשית" (6 אותיות)
+    // היה נופל לאותה מלכודת כמו "חולין".
+    #[test]
+    fn safe_replace_protects_tanakh_books() {
+        assert_eq!(safe_replace_hebrew_numbers("בראשית א"), "בראשית 1");
+        assert_eq!(safe_replace_hebrew_numbers("איוב מא"), "איוב 41");
+        assert_eq!(safe_replace_hebrew_numbers("תהלים קיט"), "תהלים 119");
+    }
+
+    // באג מקורי (קריטי - panic): קיצור קצר משם המלא (כמו "ב"ק" מול "בבא
+    // קמא") גרם ל-index-out-of-bounds panic כשהקוד חתך לפי אורך ה-target
+    // במקום לפי אורך ההתאמה עצמה. הטסט רק מוודא שזה לא קורס.
+    #[test]
+    fn safe_replace_short_abbreviation_no_panic() {
+        let _ = safe_replace_hebrew_numbers("ב\"ק א");
+        let _ = safe_replace_hebrew_numbers("ר\"ה ב");
+        let _ = safe_replace_hebrew_numbers("מו\"ק ג");
+    }
+
+    // באג מקורי: "ירושלמי ברכות..." לא זוהה כלל כי הרג'קסים דורשים ששם
+    // המסכת יהיה בתחילת המחרוזת בדיוק - "ברכות" בתוך "ירושלמי ברכות"
+    // עדיין נפל למלכודת גימטריה.
+    #[test]
+    fn safe_replace_protects_yerushalmi_prefix() {
+        assert!(safe_replace_hebrew_numbers("ירושלמי ברכות ב, ג").starts_with("ירושלמי ברכות"));
+        assert!(safe_replace_hebrew_numbers("ירוש' חולין א, א").starts_with("ירושלמי חולין"));
+        assert!(safe_replace_hebrew_numbers("יר' יבמות ב").starts_with("ירושלמי יבמות"));
+    }
+
+    // "הלכות X" (רמב"ם) - שתי המילים עלולות להיתפס כגימטריה בנפרד.
+    #[test]
+    fn safe_replace_protects_rambam_hilchot() {
+        assert!(safe_replace_hebrew_numbers("הלכות שבת פרק ב").starts_with("הלכות שבת"));
+    }
+
+    // ── normalize_talmud_page / _letters: זיהוי דף+עמוד גמרא ─────────────
+    // באג מקורי: "ע"ב" (סימון עמוד ב) הומר ישירות לגימטריה (70+2=72)
+    // כי convert_rest_numbers לא הריץ קודם את הזיהוי הייעודי לדף/עמוד.
+    #[test]
+    fn talmud_page_digit_form() {
+        assert_eq!(normalize_talmud_page("מנחות לג ע\"ב"), "מנחות 33:");
+        assert_eq!(normalize_talmud_page("גיטין כח, ע\"ב"), "גיטין 28:");
+    }
+
+    // באג מקורי: גרשיים בתוך מספר הדף עצמו (ל"ה=35) גרמו לקבוצת הלכידה
+    // לעצור בגרשיים ולתפוס רק חלק מהמספר ("ה"=5 בלבד) - "קורא הפוך".
+    #[test]
+    fn talmud_page_digit_form_with_embedded_gershayim() {
+        assert_eq!(normalize_talmud_page("גיטין ל\"ה ע\"א"), "גיטין 35.");
+        assert_eq!(normalize_talmud_page("חולין קכ\"א ע\"ב"), "חולין 121:");
+    }
+
+    // פורמט he_ref אמיתי שאושר מול נתוני DB בפועל: הדף נשמר באותיות
+    // עבריות (לא ספרות), עם סימן העמוד מוצמד ישירות (למשל "מנחות לג:").
+    #[test]
+    fn talmud_page_letters_form_all_five_amud_variants() {
+        let expected = "מנחות לג:";
+        assert_eq!(normalize_talmud_page_letters("מנחות לג ע\"ב"), expected);
+        assert_eq!(normalize_talmud_page_letters("מנחות לג, ע\"ב"), expected);
+        assert_eq!(normalize_talmud_page_letters("מנחות לג עמוד ב"), expected);
+        assert_eq!(normalize_talmud_page_letters("מנחות לג ב"), expected);
+        assert_eq!(normalize_talmud_page_letters("מנחות לג ב'"), expected);
+        assert_eq!(normalize_talmud_page_letters("מנחות לג :"), expected);
+    }
+
+    #[test]
+    fn talmud_page_letters_strips_embedded_gershayim() {
+        // "ל"ה:" -> גרשיים מוסרים, נשאר "לה." (התאמה לפורמט הנקי שאושר מול ה-DB)
+        assert_eq!(normalize_talmud_page_letters("גיטין ל\"ה ע\"א"), "גיטין לה.");
+        assert_eq!(normalize_talmud_page_letters("חולין קכ\"א ע\"ב"), "חולין קכא:");
+    }
+
+    // הגנה מפני false-positive: אות בודדת (א/ב) לא אמורה להיתפס אם היא
+    // בעצם תחילת מילה עברית ארוכה יותר (למשל "אחרים").
+    #[test]
+    fn talmud_page_letters_no_false_positive_on_hebrew_words() {
+        let input = "מנחות לג אחרים בעיה";
+        assert_eq!(normalize_talmud_page_letters(input), input);
+    }
+
+    // ── canonical_key: איחוד וריאציות כתיב לאותו מקור (ניתוח ביבליוגרפי) ──
+    #[test]
+    fn canonical_key_unifies_written_variants() {
+        let k1 = canonical_key("ברכות ב.");
+        let k2 = canonical_key("ברכות דף ב.");
+        assert_eq!(k1, k2);
+    }
+
+    // ── is_recognized_source ─────────────────────────────────────────────
+    #[test]
+    fn recognizes_known_sources() {
+        assert!(is_recognized_source("חולין קכא"));
+        assert!(is_recognized_source("בראשית א"));
+    }
+
+    #[test]
+    fn does_not_recognize_unknown_source() {
+        assert!(!is_recognized_source("ספר שאינו קיים כלל בעולם"));
+    }
+}
