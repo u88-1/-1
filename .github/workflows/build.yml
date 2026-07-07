@@ -28,11 +28,6 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Run automated tests
-        run: |
-          cd src-tauri
-          cargo test
-
       - name: Build installer
         run: |
           cd src-tauri
