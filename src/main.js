@@ -901,12 +901,40 @@ document.getElementById('biblioVerifyBtn')?.addEventListener('click', async () =
     }
 });
 
+function getBiblioFilteredSortedSources(r){
+    const filterText = (document.getElementById('biblioFilterInput')?.value || '').trim().toLowerCase();
+    const sortMode = document.getElementById('biblioSortSelect')?.value || 'count-desc';
+    const onlyUnrecognized = document.getElementById('biblioOnlyUnrecognized')?.checked;
+    const onlyNotInDb = document.getElementById('biblioOnlyNotInDb')?.checked;
+
+    let list = r.sources.slice();
+    if (filterText) {
+        list = list.filter(s => s.displayName.toLowerCase().includes(filterText) || s.variantsSeen.some(v => v.toLowerCase().includes(filterText)));
+    }
+    if (onlyUnrecognized) {
+        list = list.filter(s => !s.recognized);
+    }
+    if (onlyNotInDb && biblioVerifyResults) {
+        list = list.filter(s => biblioVerifyResults[s.displayName] === false);
+    }
+    if (sortMode === 'count-asc') list.sort((a,b) => a.count - b.count);
+    else if (sortMode === 'name') list.sort((a,b) => a.displayName.localeCompare(b.displayName, 'he'));
+    else list.sort((a,b) => b.count - a.count); // count-desc (ברירת מחדל)
+    return list;
+}
+
 function renderBiblioStats(r){
     const tbody = document.getElementById('biblioStatsBody');
     tbody.innerHTML = '';
-    r.sources.forEach((src, idx) => {
+    const sources = getBiblioFilteredSortedSources(r);
+    if (!sources.length) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:20px">אין מקורות תואמים לסינון הנוכחי</td></tr>`;
+        return;
+    }
+    sources.forEach((src, idx) => {
         const tr = document.createElement('tr');
         tr.className = 'biblio-name-cell';
+        tr.id = `biblio-row-${btoa(unescape(encodeURIComponent(src.canonical))).replace(/[^a-zA-Z0-9]/g,'')}`;
 
         const tdName = document.createElement('td');
         const variantsHint = src.variantsSeen.length > 1 ? ` <span class="biblio-chapters">(${src.variantsSeen.length} צורות כתיב)</span>` : '';
@@ -1069,10 +1097,35 @@ function renderBiblioCloud(r){
         tag.textContent = src.displayName;
         const size = 12 + (src.count / maxCount) * 22;
         tag.style.fontSize = size.toFixed(1) + 'px';
-        tag.title = `${src.count} מופעים${src.recognized ? '' : ' — לא מזוהה'}`;
+        tag.title = `${src.count} מופעים${src.recognized ? '' : ' — לא מזוהה'} (לחץ לפתיחה בטבלה)`;
         if (!src.recognized) tag.style.opacity = '0.6';
+        tag.addEventListener('click', () => jumpToBiblioSource(src));
         el.appendChild(tag);
     });
+}
+
+/// קפיצה ממקור בענן/פילוח-פרקים לשורה המתאימה בטבלת הסטטיסטיקה — מנקה
+/// סינון פעיל (אחרת השורה עלולה להיות מוסתרת), עובר לטאב הסטטיסטיקה,
+/// ופותח את פאנל המופעים של השורה תוך גלילה חלקה אליה.
+function jumpToBiblioSource(src){
+    document.getElementById('biblioFilterInput').value = '';
+    document.getElementById('biblioOnlyUnrecognized').checked = false;
+    document.getElementById('biblioOnlyNotInDb').checked = false;
+    document.querySelector('input[name="biblioTab"][value="stats"]').checked = true;
+    document.getElementById('biblioTabStats').style.display = '';
+    document.getElementById('biblioTabCloud').style.display = 'none';
+    document.getElementById('biblioTabRelations').style.display = 'none';
+    document.getElementById('biblioTabChapters').style.display = 'none';
+    renderBiblioStats(biblioReport);
+    const rowId = `biblio-row-${btoa(unescape(encodeURIComponent(src.canonical))).replace(/[^a-zA-Z0-9]/g,'')}`;
+    const row = document.getElementById(rowId);
+    if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.style.transition = 'background 0.3s ease';
+        row.style.background = 'var(--gold-dim)';
+        setTimeout(() => { row.style.background = ''; }, 1500);
+        row.querySelector('.biblio-toggle-name')?.click();
+    }
 }
 
 function renderBiblioRelations(r){
@@ -1087,14 +1140,49 @@ function renderBiblioRelations(r){
     });
 }
 
-// ── מעבר בין טאבים (סטטיסטיקה / ענן / קשרים) ─────────────────────────
+/// פילוח לפי פרק — סך כל הציטוטים (מכל המקורות) שהופיעו בכל "מיקום"
+/// (פרק/סימן/חלק שזוהה), מציג כמות יחסית כעמודת-בר. עוזר לאתר פרקים
+/// עם צפיפות ציטוטים חריגה, או פרקים שכלל לא צוטטו.
+function renderBiblioChapters(r){
+    const el = document.getElementById('biblioChaptersBox');
+    const chapterCounts = {};
+    r.sources.forEach(src => {
+        (src.occurrences || []).forEach(occ => {
+            chapterCounts[occ.chapter] = (chapterCounts[occ.chapter] || 0) + 1;
+        });
+    });
+    const entries = Object.entries(chapterCounts).sort((a,b) => b[1] - a[1]);
+    if (!entries.length) {
+        el.innerHTML = `<p style="text-align:center;color:var(--text-3);padding:20px">לא זוהו כותרות פרק/סימן/חלק במסמך</p>`;
+        return;
+    }
+    const maxCount = Math.max(...entries.map(e => e[1]), 1);
+    el.innerHTML = entries.map(([chapter, count]) => `
+        <div class="biblio-chapter-row">
+            <div class="biblio-chapter-name">${escapeHtml(chapter)}</div>
+            <div class="biblio-chapter-bar-track"><div class="biblio-chapter-bar-fill" style="width:${(count/maxCount*100).toFixed(1)}%"></div></div>
+            <div class="biblio-chapter-count">${count}</div>
+        </div>
+    `).join('');
+}
+
+// ── מעבר בין טאבים (סטטיסטיקה / ענן / קשרים / פילוח פרקים) ───────────
 document.querySelectorAll('input[name="biblioTab"]').forEach(radio => {
     radio.addEventListener('change', () => {
         const val = radio.value;
         document.getElementById('biblioTabStats').style.display = val === 'stats' ? '' : 'none';
         document.getElementById('biblioTabCloud').style.display = val === 'cloud' ? '' : 'none';
         document.getElementById('biblioTabRelations').style.display = val === 'relations' ? '' : 'none';
+        document.getElementById('biblioTabChapters').style.display = val === 'chapters' ? '' : 'none';
+        if (val === 'chapters' && biblioReport) renderBiblioChapters(biblioReport);
     });
+});
+
+// ── סינון/מיון טבלת הסטטיסטיקה ────────────────────────────────────────
+['biblioFilterInput', 'biblioSortSelect', 'biblioOnlyUnrecognized', 'biblioOnlyNotInDb'].forEach(id => {
+    const el = document.getElementById(id);
+    const evt = el?.tagName === 'INPUT' && el.type === 'text' ? 'input' : 'change';
+    el?.addEventListener(evt, () => { if (biblioReport) renderBiblioStats(biblioReport); });
 });
 
 // ── הורדות ────────────────────────────────────────────────────────────

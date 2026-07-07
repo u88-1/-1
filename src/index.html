@@ -37,7 +37,7 @@
                 הגדרות
             </a>
         </nav>
-        <div class="sidebar-bottom">v4.2.7 · U88-1 · Tauri</div>
+        <div class="sidebar-bottom">v4.2.8 · U88-1 · Tauri</div>
     </aside>
 
     <main class="main">
@@ -177,9 +177,20 @@
                         <label class="bracket-opt"><input type="radio" name="biblioTab" value="stats" checked /><span class="bracket-btn">📋</span>סטטיסטיקה</label>
                         <label class="bracket-opt"><input type="radio" name="biblioTab" value="cloud" /><span class="bracket-btn">☁️</span>ענן מקורות</label>
                         <label class="bracket-opt"><input type="radio" name="biblioTab" value="relations" /><span class="bracket-btn">🔗</span>קשרים</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="chapters" /><span class="bracket-btn">📖</span>פילוח לפי פרק</label>
                     </div>
 
                     <div id="biblioTabStats" class="biblio-tab-view">
+                        <div class="biblio-toolbar">
+                            <input id="biblioFilterInput" type="text" class="field-input" placeholder="🔍 סנן לפי שם מקור..." style="max-width:220px" />
+                            <select id="biblioSortSelect" class="field-input" style="max-width:170px">
+                                <option value="count-desc">מיון: הכי הרבה מופעים</option>
+                                <option value="count-asc">מיון: הכי מעט מופעים</option>
+                                <option value="name">מיון: אלפביתי</option>
+                            </select>
+                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyUnrecognized" /> רק לא-מזוהים</label>
+                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyNotInDb" /> רק לא-במאגר</label>
+                        </div>
                         <div class="table-wrap">
                             <table>
                                 <thead><tr>
@@ -195,6 +206,7 @@
                     </div>
 
                     <div id="biblioTabCloud" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">לחיצה על מקור בענן תפתח אותו בטבלת הסטטיסטיקה:</p>
                         <div class="cloud-box" id="biblioCloud"></div>
                     </div>
 
@@ -206,6 +218,11 @@
                                 <tbody id="biblioRelationsBody"></tbody>
                             </table>
                         </div>
+                    </div>
+
+                    <div id="biblioTabChapters" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">כמות ציטוטים לפי מיקום במסמך — עוזר לאתר פרקים עם צפיפות ציטוטים חריגה:</p>
+                        <div id="biblioChaptersBox"></div>
                     </div>
                 </section>
             </div>
@@ -219,7 +236,7 @@
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
                 <div class="about-title">בודק מקורות</div>
-                <div class="about-version" id="aboutVersionDisplay">גרסה 4.2.7 · U88-1 · Tauri</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.2.8 · U88-1 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
@@ -230,7 +247,7 @@
                     <div class="changelog-title">📋 שינויי גרסאות</div>
                     <div class="changelog-list" id="changelogList">
                         <div class="changelog-item">
-                            <div class="changelog-ver">v4.2.7 — נוכחי</div>
+                            <div class="changelog-ver">v4.2.8 — נוכחי</div>
                             <ul>
                                 <li>הגדלה/הקטנה של גודל הכתב בתוצאות</li>
                                 <li>מצב יום ומצב לילה</li>
