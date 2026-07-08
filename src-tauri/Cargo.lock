@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "bodek-mekorot"
-version = "4.3.2"
+version = "4.3.3"
 dependencies = [
  "fancy-regex",
  "once_cell",
