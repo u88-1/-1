@@ -1761,3 +1761,18 @@ mark.focus-mark {
     transition: width 0.3s ease;
 }
 .biblio-chapter-count { flex: 0 0 40px; text-align: left; font-size: 12.5px; color: var(--text-2); font-weight: 700; }
+
+/* ── עורך AI: פיסוק ומקורות ── */
+.ai-columns-wrapper { display: flex; gap: 20px; height: 480px; }
+.ai-column { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ai-column-title { font-size: 12.5px; font-weight: 700; color: var(--text-2); margin-bottom: 8px; }
+.ai-scroll-area {
+    line-height: 2.2; padding: 18px; border: 1px solid var(--border); border-radius: 10px;
+    flex-grow: 1; background: var(--panel-bg); white-space: pre-wrap; overflow-y: auto;
+    font-size: 18px; font-family: 'Frank Ruhl Libre', serif; direction: rtl;
+}
+.ai-word { cursor: pointer; padding: 2px 4px; border-radius: 4px; display: inline-block; }
+.ai-word.match { color: var(--text); cursor: default; }
+.ai-word.added { background: var(--green-dim); color: var(--green); font-weight: 700; }
+.ai-word.bracket { background: var(--gold-dim); color: var(--gold-light); font-weight: 700; border: 1px solid var(--gold-border); }
+.ai-word.user-hidden { opacity: 0.25; text-decoration: line-through; }

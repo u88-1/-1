@@ -28,6 +28,10 @@
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.5"/><circle cx="14" cy="6" r="2.5"/><circle cx="10" cy="15" r="2.5"/><path d="M8 7.5L9 13M12 7.5L11 13" stroke-linecap="round"/></svg>
                 ניתוח ביבליוגרפי
             </a>
+            <a class="nav-link" href="#" data-page="aieditor">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h9l3 3v9H4z"/><path d="M7 8h6M7 11h6M7 14h3" stroke-linecap="round"/></svg>
+                עורך AI — פיסוק ומקורות
+            </a>
             <a class="nav-link" href="#" data-page="about">
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 7v.5" stroke-linecap="round"/></svg>
                 אודות
@@ -37,7 +41,7 @@
                 הגדרות
             </a>
         </nav>
-        <div class="sidebar-bottom">v4.2.9 · U88-1 · Tauri</div>
+        <div class="sidebar-bottom">v4.3.0 · U88-1 · Tauri</div>
     </aside>
 
     <main class="main">
@@ -228,6 +232,82 @@
             </div>
         </div>
 
+        <!-- ══ PAGE: עורך AI — פיסוק ומקורות ══ -->
+        <div id="page-aieditor" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">עורך <span>AI</span> — פיסוק ומקורות</h1>
+                    <p class="page-sub">פיסוק אוטומטי, איתור מראי מקומות ופתיחת ראשי תיבות באמצעות Gemini, עם השוואה חזותית מול המקור</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🔑</div>חיבור ל-Gemini</div>
+                <div class="fields" style="grid-template-columns:2fr 1fr">
+                    <div class="field">
+                        <label class="field-label" for="aiApiKey">מפתח API</label>
+                        <input type="password" id="aiApiKey" class="field-input" placeholder="הדבק כאן את מפתח ה-Gemini API שלך" style="direction:ltr;font-family:monospace" />
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="aiModelSelect">מודל</label>
+                        <select id="aiModelSelect" class="field-input">
+                            <option value="gemini-flash-latest">Gemini 1.5 Flash (הכי יציב)</option>
+                            <option value="gemini-1.5-flash">Gemini 1.5 Flash (חלופי)</option>
+                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (חדש)</option>
+                        </select>
+                    </div>
+                </div>
+                <p class="field-hint">המפתח נשאר בזיכרון המקומי בלבד ואינו נשמר או נשלח לשום מקום מלבד Google.</p>
+            </section>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📝</div>טקסטים</div>
+                <div class="fields" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+                    <div class="field">
+                        <label class="field-label">טקסט מקורי</label>
+                        <textarea id="aiTextA" class="paste-textarea" style="min-height:180px" placeholder="הדבק כאן את הטקסט המקורי שלך..."></textarea>
+                    </div>
+                    <div class="field">
+                        <label class="field-label">תוצאת ה-AI</label>
+                        <textarea id="aiTextB" class="paste-textarea" style="min-height:180px" placeholder="תוצאת ה-AI תופיע כאן — ניתן גם להדביק ידנית..."></textarea>
+                    </div>
+                </div>
+
+                <div id="aiStatus" class="status-bar" style="display:none"></div>
+
+                <div style="display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:6px">
+                    <button id="aiBtnRun" class="run-btn" style="max-width:260px">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+                        שלב א׳ — איתור מקורות ופיסוק
+                    </button>
+                    <button id="aiBtnCompare" class="run-btn" style="max-width:220px;background:var(--teal, var(--gold))">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                        שלב ב׳ — השוואה ומיזוג
+                    </button>
+                    <button id="aiBtnSave" class="run-btn" style="max-width:180px;background:var(--green,var(--gold))">
+                        💾 שמור תוצאה
+                    </button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🔬</div>השוואה ותצוגה</div>
+                <p class="field-hint" style="margin-bottom:10px">לחיצה על מילה מודגשת (נוספה / מקור בסוגריים) מסתירה אותה מהתוצאה הסופית — לחיצה נוספת מחזירה אותה.</p>
+                <div class="ai-columns-wrapper">
+                    <div class="ai-column">
+                        <div class="ai-column-title">חלונית עריכה</div>
+                        <div id="aiDiffContainer" class="ai-scroll-area"></div>
+                    </div>
+                    <div class="ai-column">
+                        <div class="ai-column-title">תוצאה סופית</div>
+                        <div id="aiPreviewContainer" class="ai-scroll-area"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
         <!-- ══ PAGE: אודות ══ -->
         <div id="page-about" class="page" style="display:none">
             <header class="page-header centered-header">
@@ -236,7 +316,7 @@
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
                 <div class="about-title">בודק מקורות</div>
-                <div class="about-version" id="aboutVersionDisplay">גרסה 4.2.9 · U88-1 · Tauri</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.3.0 · U88-1 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
@@ -247,7 +327,7 @@
                     <div class="changelog-title">📋 שינויי גרסאות</div>
                     <div class="changelog-list" id="changelogList">
                         <div class="changelog-item">
-                            <div class="changelog-ver">v4.2.9 — נוכחי</div>
+                            <div class="changelog-ver">v4.3.0 — נוכחי</div>
                             <ul>
                                 <li>הגדלה/הקטנה של גודל הכתב בתוצאות</li>
                                 <li>מצב יום ומצב לילה</li>

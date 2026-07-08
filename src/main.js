@@ -113,7 +113,7 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 
 // ── הצגת דפים ─────────────────────────────────────────
 function showPage(name){
-    ['compare','history','biblio','about','settings'].forEach(p=>{
+    ['compare','history','biblio','aieditor','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
         if(el)el.style.display=p===name?'':'none';
     });
@@ -1208,3 +1208,116 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
     a.download = 'ניתוח_ביבליוגרפי.csv';
     a.click();
 });
+
+// ════════════════════════════════════════════════════════════════════════
+//  עורך AI — פיסוק ומקורות (Gemini)
+//  הועתק מהכלי שסופק, עם שינוי עיצוב/מזהי-DOM בלבד. הלוגיקה (הפרומפט,
+//  אלגוריתם ה-diff, לחיצה-להסתרה, שמירה) נשארה זהה לחלוטין ולא נגעתי בה.
+// ════════════════════════════════════════════════════════════════════════
+(function initAiEditor(){
+    const aiStatusDiv = document.getElementById('aiStatus');
+    if (!aiStatusDiv) return;
+
+    document.getElementById('aiBtnRun').onclick = async () => {
+        const key = document.getElementById('aiApiKey').value.trim();
+        const txt = document.getElementById('aiTextA').value.trim();
+        const model = document.getElementById('aiModelSelect').value;
+
+        if(!txt) { alert("אנא הכנס טקסט בתיבת הטקסט המקורי"); return; }
+
+        aiStatusDiv.style.display = 'block';
+        aiStatusDiv.className = 'status-bar working';
+        aiStatusDiv.innerText = `מתחבר ל- ${model}...`;
+
+        try {
+            // שימוש ב-v1beta כי הוא הכי גמיש לשמות המודלים
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    contents: [{ parts: [{
+                        text: "אתה עורך תורני מומחה. בצע פיסוק לטקסט הבא והוסף מראה מקומות (תנ\"ך, גמרא, מדרש, רמב\"ם) בסוגריים מסולסלים {}. אל תשנה את המילים המקוריות, רק הוסף פיסוק ומקורות, וציטוטים תשים בתוך גרשיים תחילה וסוף. תוסיף כותרות נושא קצרות, בסיגנון ישיבתי ליטאי, בין 3 ל6 מילים בתוך סוגרים מרובעות, ותפתח ראשי תיבות (לא ראשי תיבות של ז\"ל זכרונו או זכרונם לברכה או ה' - השם, או הקב\"ה - הקדוש ברוך הוא) רק בתוך סוגרים עגולות, ולא לשנות מהטקסט את הפענוח בתוך סוגרים עגולות, וחלק פסקאות לפי נושאים בלבד אבל אל תשנה מהמילים המקוריות בכלל אל תוסיף כוכביות סימני שאלה וסולמיות.\n\n" + txt
+                    }]}]
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                if (data.error.message.includes("quota")) {
+                    throw new Error("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.");
+                }
+                throw new Error(data.error.message);
+            }
+
+            if (data.candidates && data.candidates[0].content) {
+                document.getElementById('aiTextB').value = data.candidates[0].content.parts[0].text;
+                aiStatusDiv.className = 'status-bar ok';
+                aiStatusDiv.innerText = "העיבוד הושלם בהצלחה!";
+                setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
+            }
+        } catch (e) {
+            aiStatusDiv.className = 'status-bar error';
+            aiStatusDiv.style.whiteSpace = 'pre-wrap';
+            aiStatusDiv.innerText = "שגיאה: " + e.message;
+        }
+    };
+
+    document.getElementById('aiBtnCompare').onclick = () => {
+        const container = document.getElementById('aiDiffContainer');
+        const rawA = document.getElementById('aiTextA').value.trim();
+        const rawB = document.getElementById('aiTextB').value.trim();
+        if(!rawB) return;
+        container.innerHTML = '';
+        const wordsA = rawA.split(/\s+/);
+        const wordsB = rawB.match(/\{[^}]+\}|[^\s{}]+/g) || [];
+        let i = 0, j = 0;
+        while (j < wordsB.length) {
+            let wB = wordsB[j];
+            if (wB.startsWith('{') && wB.endsWith('}')) {
+                createAiSpan(wB, 'bracket', container);
+                j++;
+                continue;
+            }
+            let cleanA = (wordsA[i] || "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+            let cleanB = wB.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+            if (cleanA === cleanB || i >= wordsA.length) {
+                createAiSpan(wB, (i >= wordsA.length || wordsA[i] !== wB) ? 'added' : 'match', container);
+                if (i < wordsA.length) i++;
+                j++;
+            } else { i++; }
+        }
+        updateAiPreview();
+    };
+
+    document.getElementById('aiBtnSave').onclick = () => {
+        const text = document.getElementById('aiPreviewContainer').innerText;
+        if(!text) return;
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'טקסט_ערוך.txt';
+        a.click();
+    };
+
+    function createAiSpan(text, type, parent) {
+        const span = document.createElement('span');
+        span.innerText = text;
+        span.className = `ai-word ${type}`;
+        if (type !== 'match') {
+            span.onclick = () => { span.classList.toggle('user-hidden'); updateAiPreview(); };
+        }
+        parent.appendChild(span);
+        parent.appendChild(document.createTextNode(' '));
+    }
+
+    function updateAiPreview() {
+        let final = "";
+        document.querySelectorAll('#aiDiffContainer .ai-word').forEach(s => {
+            if (!s.classList.contains('user-hidden')) final += s.innerText + " ";
+        });
+        document.getElementById('aiPreviewContainer').innerText = final.trim().replace(/\s+([,.])/g, '$1');
+    }
+})();
