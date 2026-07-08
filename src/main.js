@@ -1218,12 +1218,33 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
     const aiStatusDiv = document.getElementById('aiStatus');
     if (!aiStatusDiv) return;
 
-    document.getElementById('aiBtnRun').onclick = async () => {
+    // טעינת מפתח API שמור (אם קיים) מהגדרות האפליקציה
+    const aiApiKeyInput = document.getElementById('aiApiKey');
+    if (aiApiKeyInput && settings.geminiApiKey) {
+        aiApiKeyInput.value = settings.geminiApiKey;
+    }
+    // שמירת המפתח אוטומטית בכל שינוי, כדי שלא יצטרך להדביק אותו כל פעם מחדש
+    aiApiKeyInput?.addEventListener('change', () => {
+        const ns = loadSettings();
+        ns.geminiApiKey = aiApiKeyInput.value.trim();
+        saveSettings(ns);
+        settings = ns;
+    });
+
+    const aiBtnRun = document.getElementById('aiBtnRun');
+    aiBtnRun.onclick = async () => {
         const key = document.getElementById('aiApiKey').value.trim();
         const txt = document.getElementById('aiTextA').value.trim();
         const model = document.getElementById('aiModelSelect').value;
 
         if(!txt) { alert("אנא הכנס טקסט לתיבה הימנית"); return; }
+        if(!key) { alert("אנא הכנס מפתח API של Gemini"); return; }
+
+        // מניעת שליחה כפולה — נועל את הכפתור עד לסיום הבקשה (הצלחה או כישלון)
+        const origBtnHtml = aiBtnRun.innerHTML;
+        aiBtnRun.disabled = true;
+        aiBtnRun.style.opacity = '0.6';
+        aiBtnRun.style.cursor = 'not-allowed';
 
         aiStatusDiv.style.display = 'block';
         aiStatusDiv.className = 'status-bar working';
@@ -1249,19 +1270,37 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
                 if (data.error.message.includes("quota")) {
                     throw new Error("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'בחר מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.");
                 }
+                if (data.error.message.includes("API key") || data.error.code === 400 || data.error.code === 403) {
+                    throw new Error("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio, ושהוא לא פג תוקף.");
+                }
                 throw new Error(data.error.message);
             }
 
-            if (data.candidates && data.candidates[0].content) {
-                document.getElementById('aiTextB').value = data.candidates[0].content.parts[0].text;
-                aiStatusDiv.className = 'status-bar ok';
-                aiStatusDiv.innerText = "העיבוד הושלם בהצלחה!";
-                setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
+            // חסימה ע"י מסנני הבטיחות של Google עוד לפני שנוצרה תגובה כלשהי
+            if (data.promptFeedback && data.promptFeedback.blockReason) {
+                throw new Error(`הבקשה נחסמה ע"י Google (סיבה: ${data.promptFeedback.blockReason}).\nנסה לקצר את הטקסט או לפצל אותו לקטעים קטנים יותר.`);
             }
+
+            const candidate = data.candidates && data.candidates[0];
+            // תגובה שנחתכה/נחסמה תוך כדי יצירה (finishReason שאינו STOP/MAX_TOKENS
+            // התקין) - למשל SAFETY, RECITATION וכו' - יכולה להגיע בלי content בכלל
+            if (!candidate || !candidate.content || !candidate.content.parts || !candidate.content.parts[0]) {
+                const reason = candidate?.finishReason || 'לא ידועה';
+                throw new Error(`Google לא החזירה תוצאה (סיבה: ${reason}).\nייתכן שהתוכן נחסם ע"י מסנני בטיחות, או שהטקסט ארוך מדי. נסה טקסט קצר יותר.`);
+            }
+
+            document.getElementById('aiTextB').value = candidate.content.parts[0].text;
+            aiStatusDiv.className = 'status-bar ok';
+            aiStatusDiv.innerText = "העיבוד הושלם בהצלחה!";
+            setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
         } catch (e) {
             aiStatusDiv.className = 'status-bar error';
             aiStatusDiv.style.whiteSpace = 'pre-wrap';
             aiStatusDiv.innerText = "שגיאה: " + e.message;
+        } finally {
+            aiBtnRun.disabled = false;
+            aiBtnRun.style.opacity = '';
+            aiBtnRun.style.cursor = '';
         }
     };
 
