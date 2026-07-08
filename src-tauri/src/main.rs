@@ -990,16 +990,29 @@ fn edit_biblio_context(
     Ok(result)
 }
 
+/// תוצאת אימות עבור מקור בודד — כוללת את הפרטים הדרושים לפתיחה
+/// ישירה באוצריא (לא רק true/false), כדי שלחיצה על "✓ נמצא" תוכל
+/// לפתוח את השורה בפועל, לא רק להראות סימן וי.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BiblioVerifyResult {
+    found: bool,
+    book_title: Option<String>,
+    book_id: Option<i64>,
+    line_index: Option<i64>,
+    he_ref: Option<String>,
+}
+
 /// אימות מהיר מול מסד הנתונים: לכל הפניה ייחודית מהניתוח הביבליוגרפי,
 /// בודקים אם קיימת שורה תואמת בפועל ב-DB (התאמה מדויקת בלבד — ללא
-/// fuzzy/Sefaria, כדי לשמור על מהירות עבור עשרות/מאות מקורות בבת אחת).
-/// זהו "שדרוג" מעל is_recognized (שרק בודק אם שם המסכת מוכר) - כאן
-/// באמת שואלים את המאגר "האם ההפניה הזו קיימת".
+/// fuzzy/Sefaria, כדי לשמור על מהירות עבור עשרות/מאות מקורות בבת אחת),
+/// ומחזירים את הפרטים המלאים של ההתאמה הראשונה (לא רק כן/לא) כדי
+/// שאפשר יהיה לפתוח אותה ישירות באוצריא בלחיצה אחת.
 #[tauri::command]
 fn verify_biblio_sources(
     refs: Vec<String>,
     db_path: Option<String>,
-) -> Result<HashMap<String, bool>, String> {
+) -> Result<HashMap<String, BiblioVerifyResult>, String> {
     let resolved_db = db_path
         .as_deref()
         .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
@@ -1009,23 +1022,116 @@ fn verify_biblio_sources(
     let s = &opendb.schema;
     let base = select_prefix(s);
 
-    let mut result: HashMap<String, bool> = HashMap::new();
+    let mut result: HashMap<String, BiblioVerifyResult> = HashMap::new();
     for r in refs {
         let normalized = normalize_ref(&r);
         let variants = generate_variants(&normalized);
         if variants.is_empty() {
-            result.insert(r, false);
+            result.insert(
+                r,
+                BiblioVerifyResult { found: false, book_title: None, book_id: None, line_index: None, he_ref: None },
+            );
             continue;
         }
         let sql = build_batch_exact_sql(&base, &s.he_ref, variants.len());
         let mut seen: HashSet<i64> = HashSet::new();
         let mut out: Vec<RowOut> = Vec::new();
-        let found = collect_batch(&opendb.conn, &sql, &variants, "exact", &mut seen, &mut out)
-            .map(|_| !out.is_empty())
-            .unwrap_or(false);
-        result.insert(r, found);
+        let _ = collect_batch(&opendb.conn, &sql, &variants, "exact", &mut seen, &mut out);
+        let verify = match out.into_iter().next() {
+            Some(row) => BiblioVerifyResult {
+                found: true,
+                book_title: Some(row.book_title),
+                book_id: row.book_id,
+                line_index: row.line_index,
+                he_ref: Some(row.he_ref),
+            },
+            None => BiblioVerifyResult { found: false, book_title: None, book_id: None, line_index: None, he_ref: None },
+        };
+        result.insert(r, verify);
     }
     Ok(result)
+}
+
+/// קריאה ל-Gemini API דרך Rust במקום fetch() בצד ה-JS.
+/// למה: Google לא בהכרח שולחת כותרות CORS שמתירות מקורות מסוג
+/// tauri://‎ (בניגוד לדפדפן רגיל עם מקור http/https) - גם אם ה-CSP
+/// של ה-webview מתיר את הבקשה לצאת, ה-webview עשוי לחסום את קריאת
+/// התגובה בגלל CORS, מה שמופיע כ-"Failed to fetch" סתמי בלי שום
+/// מידע שימושי. קריאת HTTP מתוך Rust אינה כפופה כלל למדיניות CORS
+/// (זו מדיניות אכיפה של דפדפנים/webviews בלבד, לא של לקוחות HTTP
+/// שרתיים) - כך שהבעיה נעלמת לחלוטין.
+/// שאר ההיגיון (זיהוי חסימה/quota/מפתח לא תקין) הועבר לכאן במדויק
+/// מהקוד שהיה ב-JS, בלי שינוי בתוכן ההודעות.
+#[tauri::command]
+async fn call_gemini(prompt: String, api_key: String, model: String) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err("מפתח API ריק".to_string());
+    }
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model, api_key
+    );
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "contents": [{ "parts": [{ "text": prompt }] }]
+    });
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("שגיאת רשת בפנייה ל-Gemini: {}", e))?;
+
+    let data: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("שגיאה בפענוח תגובת Gemini: {}", e))?;
+
+    if let Some(err) = data.get("error") {
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("שגיאה לא ידועה");
+        if msg.contains("quota") {
+            return Err("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'בחר מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.".to_string());
+        }
+        let code = err.get("code").and_then(|c| c.as_i64());
+        if msg.contains("API key") || code == Some(400) || code == Some(403) {
+            return Err("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio, ושהוא לא פג תוקף.".to_string());
+        }
+        return Err(msg.to_string());
+    }
+
+    if let Some(block_reason) = data
+        .get("promptFeedback")
+        .and_then(|p| p.get("blockReason"))
+        .and_then(|b| b.as_str())
+    {
+        return Err(format!(
+            "הבקשה נחסמה ע\"י Google (סיבה: {}).\nנסה לקצר את הטקסט או לפצל אותו לקטעים קטנים יותר.",
+            block_reason
+        ));
+    }
+
+    let candidate = data.get("candidates").and_then(|c| c.get(0));
+    let text = candidate
+        .and_then(|c| c.get("content"))
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.get(0))
+        .and_then(|p| p.get("text"))
+        .and_then(|t| t.as_str());
+
+    match text {
+        Some(t) => Ok(t.to_string()),
+        None => {
+            let reason = candidate
+                .and_then(|c| c.get("finishReason"))
+                .and_then(|r| r.as_str())
+                .unwrap_or("לא ידועה");
+            Err(format!(
+                "Google לא החזירה תוצאה (סיבה: {}).\nייתכן שהתוכן נחסם ע\"י מסנני בטיחות, או שהטקסט ארוך מדי. נסה טקסט קצר יותר.",
+                reason
+            ))
+        }
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2686,7 +2792,8 @@ fn main() {
             check_ref_index,
             analyze_bibliography,
             edit_biblio_context,
-            verify_biblio_sources
+            verify_biblio_sources,
+            call_gemini
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};

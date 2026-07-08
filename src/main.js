@@ -813,7 +813,7 @@ loadSettingsUI();
 //  ניתוח ביבליוגרפי — סטטיסטיקה, ענן מקורות, קורלציות (v1)
 // ════════════════════════════════════════════════════════════════════════
 let biblioReport = null;
-let biblioVerifyResults = null; // Map: displayName -> true/false (מאומת מול ה-DB בפועל, לא רק "מזוהה")
+let biblioVerifyResults = null; // Map: displayName -> {found, bookTitle, bookId, lineIndex, heRef} (מאומת מול ה-DB בפועל)
 
 document.getElementById('biblioFileInput')?.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -863,7 +863,7 @@ function renderBiblioKpis(r){
     const el = document.getElementById('biblioKpis');
     let verifyCard = '';
     if (biblioVerifyResults) {
-        const notFound = r.sources.filter(s => biblioVerifyResults[s.displayName] === false).length;
+        const notFound = r.sources.filter(s => biblioVerifyResults[s.displayName]?.found === false).length;
         verifyCard = `<div class="stat-card ${notFound>0?'s-missing':'s-found'}"><div class="stat-num">${notFound}</div><div class="stat-label">לא נמצאו במאגר</div></div>`;
     }
     el.innerHTML = `
@@ -915,12 +915,57 @@ function getBiblioFilteredSortedSources(r){
         list = list.filter(s => !s.recognized);
     }
     if (onlyNotInDb && biblioVerifyResults) {
-        list = list.filter(s => biblioVerifyResults[s.displayName] === false);
+        list = list.filter(s => biblioVerifyResults[s.displayName]?.found === false);
     }
     if (sortMode === 'count-asc') list.sort((a,b) => a.count - b.count);
     else if (sortMode === 'name') list.sort((a,b) => a.displayName.localeCompare(b.displayName, 'he'));
     else list.sort((a,b) => b.count - a.count); // count-desc (ברירת מחדל)
     return list;
+}
+
+/// בונה את תא ה"אימות" האינטראקטיבי — עמודה אחת ממוזגת במקום שתי
+/// עמודות סטטיות נפרדות (זוהה?/במאגר?). מצב תלוי בשלב:
+/// - טרם אומת מול ה-DB: רמז חלש בלבד (שם מוכר/לא מוכר)
+/// - אומת ונמצא: כפתור לחיץ שפותח ישירות באוצריא (משתמש ב-bookId/
+///   lineIndex האמיתיים שהוחזרו מ-verify_biblio_sources)
+/// - אומת ולא נמצא: תג אדום, לא לחיץ
+function buildVerifyCell(src){
+    const wrap = document.createElement('div');
+    const info = biblioVerifyResults ? biblioVerifyResults[src.displayName] : null;
+    if (info && info.found) {
+        const btn = document.createElement('button');
+        btn.className = 'biblio-mini-btn primary';
+        btn.textContent = '✓ פתח באוצריא';
+        if (info.heRef) btn.title = `${info.bookTitle || ''} ${info.heRef}`.trim();
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const orig = btn.textContent;
+            btn.textContent = '⏳ פותח...';
+            btn.disabled = true;
+            try {
+                await invoke('open_in_otzaria', {
+                    bookTitle: info.bookTitle,
+                    lineIndex: info.lineIndex,
+                    bookId: info.bookId ?? null,
+                    dbPath: document.getElementById('dbPath')?.value.trim() || null,
+                });
+                btn.textContent = '✅ נפתח!';
+                setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+            } catch (err) {
+                btn.textContent = orig;
+                btn.disabled = false;
+                alert('שגיאה בפתיחת אוצריא:\n' + err);
+            }
+        });
+        wrap.appendChild(btn);
+    } else if (info && !info.found) {
+        wrap.innerHTML = `<span class="biblio-unrecognized" title="לא נמצאה התאמה מדויקת במאגר">✗ לא נמצא</span>`;
+    } else {
+        wrap.innerHTML = src.recognized
+            ? `<span class="biblio-chapters" title="שם מוכר — עדיין לא נבדק מול המאגר בפועל (לחץ 'אימות מול המאגר' למעלה)">שם מוכר —</span>`
+            : `<span class="biblio-unrecognized" title="שם לא מוכר — עדיין לא נבדק מול המאגר">לא ידוע</span>`;
+    }
+    return wrap;
 }
 
 function renderBiblioStats(r){
@@ -947,17 +992,10 @@ function renderBiblioStats(r){
         tdLocs.className = 'biblio-chapters';
         tdLocs.textContent = src.chapters.join(', ');
 
-        const tdRec = document.createElement('td');
-        tdRec.innerHTML = src.recognized ? '✓' : '<span class="biblio-unrecognized">✗</span>';
-
         const tdVerify = document.createElement('td');
-        if (biblioVerifyResults && Object.prototype.hasOwnProperty.call(biblioVerifyResults, src.displayName)) {
-            tdVerify.innerHTML = biblioVerifyResults[src.displayName] ? '✓' : '<span class="biblio-unrecognized">✗</span>';
-        } else {
-            tdVerify.innerHTML = '<span class="biblio-chapters">—</span>';
-        }
+        tdVerify.appendChild(buildVerifyCell(src));
 
-        tr.append(tdName, tdCount, tdLocs, tdRec, tdVerify);
+        tr.append(tdName, tdCount, tdLocs, tdVerify);
         tbody.appendChild(tr);
 
         // שורת פרטים (מוסתרת כברירת מחדל) — כל מופע עם ההקשר שלו ואפשרות עריכה
@@ -965,7 +1003,7 @@ function renderBiblioStats(r){
         detailTr.style.display = 'none';
         detailTr.className = 'biblio-detail-row';
         const detailTd = document.createElement('td');
-        detailTd.colSpan = 5;
+        detailTd.colSpan = 4;
         detailTd.appendChild(buildOccurrencesPanel(src, idx));
         detailTr.appendChild(detailTd);
         tbody.appendChild(detailTr);
@@ -1251,52 +1289,23 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
         aiStatusDiv.innerText = `מתחבר ל- ${model}...`;
 
         try {
-            // שימוש ב-v1beta כי הוא הכי גמיש לשמות המודלים
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+            const prompt = "אתה עורך תורני מומחה. בצע פיסוק לטקסט הבא והוסף מראה מקומות (תנ\"ך, גמרא, מדרש, רמב\"ם) בסוגריים מסולסלים {}. אל תשנה את המילים המקוריות, רק הוסף פיסוק ומקורות, וציטוטים תשים בתוך גרשיים תחילה וסוף. תוסיף כותרות נושא קצרות, בסיגנון ישיבתי ליטאי, בין 3 ל6 מילים בתוך סוגרים מרובעות, ותפתח ראשי תיבות (לא ראשי תיבות של ז\"ל זכרונו או זכרונם לברכה או ה' - השם, או הקב\"ה - הקדוש ברוך הוא) רק בתוך סוגרים עגולות, ולא לשנות מהטקסט את הפענוח בתוך סוגרים עגולות, וחלק פסקאות לפי נושאים בלבד אבל אל תשנה מהמילים המקוריות בכלל אל תוסיף כוכביות סימני שאלה וסולמיות.\n\n" + txt;
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    contents: [{ parts: [{
-                        text: "אתה עורך תורני מומחה. בצע פיסוק לטקסט הבא והוסף מראה מקומות (תנ\"ך, גמרא, מדרש, רמב\"ם) בסוגריים מסולסלים {}. אל תשנה את המילים המקוריות, רק הוסף פיסוק ומקורות, וציטוטים תשים בתוך גרשיים תחילה וסוף. תוסיף כותרות נושא קצרות, בסיגנון ישיבתי ליטאי, בין 3 ל6 מילים בתוך סוגרים מרובעות, ותפתח ראשי תיבות (לא ראשי תיבות של ז\"ל זכרונו או זכרונם לברכה או ה' - השם, או הקב\"ה - הקדוש ברוך הוא) רק בתוך סוגרים עגולות, ולא לשנות מהטקסט את הפענוח בתוך סוגרים עגולות, וחלק פסקאות לפי נושאים בלבד אבל אל תשנה מהמילים המקוריות בכלל אל תוסיף כוכביות סימני שאלה וסולמיות.\n\n" + txt
-                    }]}]
-                })
-            });
+            // invoke דרך Rust במקום fetch() ישיר מה-JS — עוקף לחלוטין את
+            // חסימת ה-CORS שה-webview עלול להטיל על תגובות מ-Google (זו
+            // הסיבה ל"Failed to fetch" הסתמי). כל לוגיקת הזיהוי (quota/
+            // מפתח לא תקין/חסימת בטיחות) רצה עכשיו בצד Rust בפקודת
+            // call_gemini, עם אותן הודעות שגיאה בדיוק.
+            const resultText = await invoke('call_gemini', { prompt, apiKey: key, model });
 
-            const data = await response.json();
-
-            if (data.error) {
-                if (data.error.message.includes("quota")) {
-                    throw new Error("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'בחר מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.");
-                }
-                if (data.error.message.includes("API key") || data.error.code === 400 || data.error.code === 403) {
-                    throw new Error("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio, ושהוא לא פג תוקף.");
-                }
-                throw new Error(data.error.message);
-            }
-
-            // חסימה ע"י מסנני הבטיחות של Google עוד לפני שנוצרה תגובה כלשהי
-            if (data.promptFeedback && data.promptFeedback.blockReason) {
-                throw new Error(`הבקשה נחסמה ע"י Google (סיבה: ${data.promptFeedback.blockReason}).\nנסה לקצר את הטקסט או לפצל אותו לקטעים קטנים יותר.`);
-            }
-
-            const candidate = data.candidates && data.candidates[0];
-            // תגובה שנחתכה/נחסמה תוך כדי יצירה (finishReason שאינו STOP/MAX_TOKENS
-            // התקין) - למשל SAFETY, RECITATION וכו' - יכולה להגיע בלי content בכלל
-            if (!candidate || !candidate.content || !candidate.content.parts || !candidate.content.parts[0]) {
-                const reason = candidate?.finishReason || 'לא ידועה';
-                throw new Error(`Google לא החזירה תוצאה (סיבה: ${reason}).\nייתכן שהתוכן נחסם ע"י מסנני בטיחות, או שהטקסט ארוך מדי. נסה טקסט קצר יותר.`);
-            }
-
-            document.getElementById('aiTextB').value = candidate.content.parts[0].text;
+            document.getElementById('aiTextB').value = resultText;
             aiStatusDiv.className = 'status-bar ok';
             aiStatusDiv.innerText = "העיבוד הושלם בהצלחה!";
             setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
         } catch (e) {
             aiStatusDiv.className = 'status-bar error';
             aiStatusDiv.style.whiteSpace = 'pre-wrap';
-            aiStatusDiv.innerText = "שגיאה: " + e.message;
+            aiStatusDiv.innerText = "שגיאה: " + (e.message || e);
         } finally {
             aiBtnRun.disabled = false;
             aiBtnRun.style.opacity = '';
