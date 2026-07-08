@@ -1223,7 +1223,7 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
         const txt = document.getElementById('aiTextA').value.trim();
         const model = document.getElementById('aiModelSelect').value;
 
-        if(!txt) { alert("אנא הכנס טקסט בתיבת הטקסט המקורי"); return; }
+        if(!txt) { alert("אנא הכנס טקסט לתיבה הימנית"); return; }
 
         aiStatusDiv.style.display = 'block';
         aiStatusDiv.className = 'status-bar working';
@@ -1247,7 +1247,7 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
 
             if (data.error) {
                 if (data.error.message.includes("quota")) {
-                    throw new Error("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.");
+                    throw new Error("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'בחר מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.");
                 }
                 throw new Error(data.error.message);
             }
