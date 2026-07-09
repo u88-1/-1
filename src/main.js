@@ -113,7 +113,7 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 
 // ── הצגת דפים ─────────────────────────────────────────
 function showPage(name){
-    ['compare','history','biblio','aieditor','about','settings'].forEach(p=>{
+    ['compare','history','biblio','aieditor','summarizer','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
         if(el)el.style.display=p===name?'':'none';
     });
@@ -1252,22 +1252,41 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
 //  הועתק מהכלי שסופק, עם שינוי עיצוב/מזהי-DOM בלבד. הלוגיקה (הפרומפט,
 //  אלגוריתם ה-diff, לחיצה-להסתרה, שמירה) נשארה זהה לחלוטין ולא נגעתי בה.
 // ════════════════════════════════════════════════════════════════════════
+// ── מפתח Gemini משותף — אחסון מוצפן דרך ה-OS keychain, לא localStorage ──
+// משמש גם את עורך ה-AI וגם את מסכם הטקסט; טעינה/שמירה חד-פעמית מספיקה
+// כי שני הכלים משתמשים באותו slot ב-keychain.
+async function wireGeminiKeyInput(inputEl){
+    if (!inputEl) return;
+    try {
+        const saved = await invoke('load_gemini_key');
+        if (saved) inputEl.value = saved;
+    } catch (e) {
+        console.warn('לא ניתן היה לטעון מפתח Gemini שמור:', e);
+    }
+    inputEl.addEventListener('change', async () => {
+        const val = inputEl.value.trim();
+        try {
+            if (val) {
+                await invoke('save_gemini_key', { key: val });
+            } else {
+                await invoke('delete_gemini_key');
+            }
+        } catch (e) {
+            console.warn('לא ניתן היה לשמור את מפתח Gemini:', e);
+        }
+    });
+}
+
 (function initAiEditor(){
     const aiStatusDiv = document.getElementById('aiStatus');
     if (!aiStatusDiv) return;
 
-    // טעינת מפתח API שמור (אם קיים) מהגדרות האפליקציה
+    // מפתח ה-API נשמר כעת באחסון המוצפן של מערכת ההפעלה (Windows
+    // Credential Manager וכו') דרך wireGeminiKeyInput המשותפת — לא
+    // ב-localStorage גלוי. אותה פונקציה משמשת גם את כלי הסיכום, כך
+    // שהמפתח משותף בין שני הכלים ולא צריך להזין אותו פעמיים.
     const aiApiKeyInput = document.getElementById('aiApiKey');
-    if (aiApiKeyInput && settings.geminiApiKey) {
-        aiApiKeyInput.value = settings.geminiApiKey;
-    }
-    // שמירת המפתח אוטומטית בכל שינוי, כדי שלא יצטרך להדביק אותו כל פעם מחדש
-    aiApiKeyInput?.addEventListener('change', () => {
-        const ns = loadSettings();
-        ns.geminiApiKey = aiApiKeyInput.value.trim();
-        saveSettings(ns);
-        settings = ns;
-    });
+    wireGeminiKeyInput(aiApiKeyInput);
 
     const aiBtnRun = document.getElementById('aiBtnRun');
     aiBtnRun.onclick = async () => {
@@ -1369,3 +1388,326 @@ document.getElementById('biblioDownloadCsv')?.addEventListener('click', () => {
         document.getElementById('aiPreviewContainer').innerText = final.trim().replace(/\s+([,.])/g, '$1');
     }
 })();
+
+// ════════════════════════════════════════════════════════════════════════
+//  מסכם טקסט חכם (Gemini) — נושאים, שמות/מקורות, סיכום ישיבתי, שאלות-תשובה
+//  הועתק מהכלי שסופק: הפרומפטים, לוגיקת החילוץ/רינדור, ואפקט ההקלדה
+//  נשארו זהים. שונה: קריאת ה-API עברה מ-fetch() ישיר ל-invoke('call_gemini')
+//  (עוקף CORS, כמו בעורך ה-AI), והמפתח משותף עם עורך ה-AI דרך אותו
+//  אחסון מוצפן.
+// ════════════════════════════════════════════════════════════════════════
+(function initSummarizer(){
+    const sumInputText = document.getElementById('sumInputText');
+    if (!sumInputText) return;
+
+    let sumLastText = '';
+
+    wireGeminiKeyInput(document.getElementById('sumApiKey'));
+
+    sumInputText.addEventListener('input', () => {
+        document.getElementById('sumCharCount').textContent =
+            sumInputText.value.length.toLocaleString('he-IL') + ' תווים';
+    });
+
+    function sumShowError(msg){
+        const box = document.getElementById('sumErrorBox');
+        box.style.display = 'block';
+        box.textContent = '⚠ ' + msg;
+    }
+    function sumHideError(){
+        document.getElementById('sumErrorBox').style.display = 'none';
+    }
+
+    function sumCleanText(text){
+        return text
+            .replace(/\*\*(.+?)\*\*/g, '$1')
+            .replace(/\*(.+?)\*/g, '$1')
+            .replace(/^#{1,6}\s+/gm, '')
+            .replace(/^[-•]\s+/gm, '')
+            .replace(/^\d+\.\s+/gm, '')
+            .replace(/`{1,3}[^`]*`{1,3}/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    async function sumCallGemini(prompt, temperature, maxOutputTokens){
+        const apiKey = document.getElementById('sumApiKey').value.trim();
+        const model = document.getElementById('sumModelSelect').value;
+        return await invoke('call_gemini', { prompt, apiKey, model, temperature, maxOutputTokens: maxOutputTokens });
+    }
+
+    function sumAddTag(wrap, text, type){
+        const span = document.createElement('span');
+        span.className = `sum-tag sum-tag-${type}`;
+        span.textContent = text;
+        wrap.appendChild(span);
+    }
+
+    document.getElementById('sumBtnRun').addEventListener('click', async () => {
+        sumHideError();
+        const text = sumInputText.value.trim();
+        const btn = document.getElementById('sumBtnRun');
+
+        if (!document.getElementById('sumApiKey').value.trim()) { sumShowError('נא להזין מפתח API.'); return; }
+        if (!text) { sumShowError('נא להדביק טקסט לסיכום.'); return; }
+        if (text.length < 30) { sumShowError('הטקסט קצר מדי לסיכום.'); return; }
+
+        sumLastText = text;
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        ['sumTopicsCard','sumNamesCard','sumSummaryCard','sumQaCard'].forEach(id =>
+            document.getElementById(id).style.display = 'none'
+        );
+
+        const topicsPrompt = `קרא את הטקסט הבא וחלץ ממנו את הנושאים העיקריים שנדונו בו.
+החזר רשימה של כל הנושאים שנדונו בטקסט, כמה שיש.
+כל נושא — כותרת תמציתית של 3-6 מילים בלבד.
+הפרד כל נושא בשורה חדשה המתחילה בסימן | (מקף אנכי).
+אל תוסיף הסברים נוספים, רק שמות הנושאים.
+
+טקסט:
+"""
+${text}
+"""
+
+נושאים:`;
+
+        const namesPrompt = `קרא את הטקסט הבא וחלץ ממנו:
+א. שמות אנשים (חכמים, רבנים, מחברים, דמויות)
+ב. שמות ספרים, מסכתות, מקורות תורניים
+ג. שמות מקומות
+
+החזר JSON בלבד, ללא שום טקסט נוסף, בפורמט הזה בדיוק:
+{"persons":["שם1","שם2"],"books":["ספר1","ספר2"],"places":["מקום1"]}
+
+אם אין פריטים בקטגוריה מסוימת, החזר מערך ריק [].
+
+טקסט:
+"""
+${text}
+"""`;
+
+        const summaryPrompt = `אתה תלמיד חכם הכותב בסגנון ישיבתי-ליטאי קלאסי.
+עליך לסכם את הטקסט שלהלן בסגנון זה במדויק.
+
+כללי הסגנון:
+- לשון הגמרא והראשונים: "דהיינו", "כלומר", "ומבואר", "ויש לומר", "ונראה", "והביאור הוא", "ומשמע מדבריו"
+- מבנה הגיוני-ניתוחי: כל עניין נובע מקודמו
+- חלוקה לנושאים עם כותרות קצרות (כותרת בשורה נפרדת ואחריה נקודתיים)
+- פסקאות רצופות ורהוטות — ללא רשימות ולא מקפים
+- פתיחה בנוסח: "יסוד הדברים הוא..." או "עניין זה עוסק ב..."
+- סיום בנוסח: "ויוצא מכל האמור כי..." או "ונמצא שהעיקר הוא..."
+- מושגים מרכזיים — הקף בגרשיים: "מילה"
+- אסור: כוכביות, סולמיות, מקפים כרשימה, מרקדאון
+- אל תוסיף מידע שאינו בטקסט
+
+טקסט:
+"""
+${text}
+"""
+
+סיכום בסגנון ישיבתי:`;
+
+        try {
+            const [topicsRaw, namesRaw, summaryRaw] = await Promise.all([
+                sumCallGemini(topicsPrompt, 0.3, 8192),
+                sumCallGemini(namesPrompt, 0.3, 8192),
+                sumCallGemini(summaryPrompt, 0.3, 8192),
+            ]);
+
+            // ── נושאים ──
+            const topicsItems = (topicsRaw || '').split('\n')
+                .map(l => l.replace(/^\|/, '').trim())
+                .filter(l => l.length > 2);
+            const hebrewLetters = ['א','ב','ג','ד','ה','ו','ז','ח','ט','י','יא','יב','יג','יד','טו','טז','יז','יח','יט','כ','כא','כב','כג','כד','כה','כו','כז','כח','כט','ל'];
+            const topicsList = document.getElementById('sumTopicsList');
+            topicsList.innerHTML = '';
+            topicsItems.forEach((item, i) => {
+                const li = document.createElement('li');
+                li.innerHTML = `<span class="sum-topic-num">${hebrewLetters[i] || (i+1)}.</span><span>${escapeHtml(item)}</span>`;
+                topicsList.appendChild(li);
+            });
+            document.getElementById('sumTopicsCard').style.display = '';
+
+            // ── שמות ומקורות ──
+            let namesObj = { persons: [], books: [], places: [] };
+            try {
+                const cleaned = (namesRaw || '').replace(/```json|```/g, '').trim();
+                namesObj = JSON.parse(cleaned);
+            } catch(e) {}
+            const tagsWrap = document.getElementById('sumNamesTags');
+            tagsWrap.innerHTML = '';
+            let hasAny = false;
+            (namesObj.persons||[]).forEach(n => { sumAddTag(tagsWrap, n, 'person'); hasAny = true; });
+            (namesObj.books||[]).forEach(n   => { sumAddTag(tagsWrap, n, 'book');   hasAny = true; });
+            (namesObj.places||[]).forEach(n  => { sumAddTag(tagsWrap, n, 'place');  hasAny = true; });
+            if (!hasAny) tagsWrap.innerHTML = '<span style="color:var(--text-3);font-size:0.9rem">לא זוהו שמות ומקורות</span>';
+            document.getElementById('sumNamesCard').style.display = '';
+
+            // ── סיכום (עם אפקט הקלדה) ──
+            const summary = sumCleanText(summaryRaw || '');
+            const summaryEl = document.getElementById('sumSummaryText');
+            document.getElementById('sumSummaryCard').style.display = '';
+            summaryEl.textContent = '';
+            summaryEl.classList.add('sum-cursor');
+            let i = 0;
+            const interval = setInterval(() => {
+                if (i < summary.length) {
+                    summaryEl.textContent += summary[i++];
+                } else {
+                    clearInterval(interval);
+                    summaryEl.classList.remove('sum-cursor');
+                }
+            }, 10);
+
+            document.getElementById('sumQaCard').style.display = '';
+        } catch (err) {
+            sumShowError(err.message || err);
+        } finally {
+            btn.disabled = false;
+            btn.style.opacity = '';
+        }
+    });
+
+    document.getElementById('sumBtnAsk').addEventListener('click', async () => {
+        const question = document.getElementById('sumQaInput').value.trim();
+        if (!question || !sumLastText) return;
+
+        const btn = document.getElementById('sumBtnAsk');
+        const answerEl = document.getElementById('sumQaAnswer');
+        btn.disabled = true;
+        const origText = btn.textContent;
+        btn.textContent = 'מחפש...';
+        answerEl.style.display = 'none';
+
+        const prompt = `להלן טקסט, ואחריו שאלה עליו. ענה על השאלה בסגנון ישיבתי-ליטאי בלבד על סמך הטקסט.
+אל תוסיף מידע שאינו בטקסט. ענה בתמציתיות ובדיוק.
+אסור: כוכביות, סולמיות, מרקדאון.
+
+טקסט:
+"""
+${sumLastText}
+"""
+
+שאלה: ${question}
+
+תשובה:`;
+
+        try {
+            const answerRaw = await sumCallGemini(prompt, 0.3, 8192);
+            answerEl.textContent = sumCleanText(answerRaw || 'לא נמצאה תשובה.');
+            answerEl.style.display = '';
+        } catch(e) {
+            answerEl.textContent = 'שגיאה: ' + (e.message || e);
+            answerEl.style.display = '';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
+    });
+
+    document.getElementById('sumBtnCopy').addEventListener('click', (e) => {
+        const text = document.getElementById('sumSummaryText').textContent;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = e.target;
+            const orig = btn.textContent;
+            btn.textContent = 'הועתק!';
+            setTimeout(() => btn.textContent = orig, 2000);
+        });
+    });
+
+    document.getElementById('sumBtnClear').addEventListener('click', () => {
+        sumInputText.value = '';
+        document.getElementById('sumSummaryText').textContent = '';
+        document.getElementById('sumTokenInfo').innerHTML = '';
+        document.getElementById('sumQaInput').value = '';
+        document.getElementById('sumQaAnswer').textContent = '';
+        document.getElementById('sumQaAnswer').style.display = 'none';
+        ['sumTopicsCard','sumNamesCard','sumSummaryCard','sumQaCard'].forEach(id =>
+            document.getElementById(id).style.display = 'none'
+        );
+        sumHideError();
+        document.getElementById('sumCharCount').textContent = '0 תווים';
+        sumLastText = '';
+    });
+
+    document.getElementById('sumQaInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('sumBtnAsk').click();
+    });
+})();
+
+// ════════════════════════════════════════════════════════════════════════
+//  זיהוי אוטומטי של סוג הסוגריים — אם יש רק סוג אחד בטקסט, נבחר אותו
+//  לבד; אם יש כמה סוגים, שואלים את המשתמש איזה מהם להשתמש.
+// ════════════════════════════════════════════════════════════════════════
+const BRACKET_PATTERNS = {
+    curly:  /\{[^{}]+\}/,
+    square: /\[[^\[\]]+\]/,
+    round:  /\([^()]+\)/,
+};
+const BRACKET_LABELS = { curly: '{ } מסולסל', square: '[ ] מרובע', round: '( ) עגול' };
+
+function detectBracketTypes(text){
+    return Object.keys(BRACKET_PATTERNS).filter(t => BRACKET_PATTERNS[t].test(text));
+}
+
+/// חלונית קטנה ששואלת איזה סוג סוגריים להשתמש כשזוהו כמה סוגים בטקסט.
+/// נבנתה כ-overlay פשוט (אין מערכת מודלים קיימת באפליקציה) — מוסרת
+/// את עצמה מיד לאחר בחירה.
+function showBracketChoiceModal(types, onChoose){
+    const existing = document.getElementById('bracketChoiceOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bracketChoiceOverlay';
+    overlay.className = 'bracket-choice-overlay';
+    overlay.innerHTML = `
+        <div class="bracket-choice-box">
+            <div class="bracket-choice-title">זוהו כמה סוגי סוגריים בטקסט — איזה מהם משמש למקורות?</div>
+            <div class="bracket-choice-opts">
+                ${types.map(t => `<button class="bracket-choice-btn" data-type="${t}">${BRACKET_LABELS[t]}</button>`).join('')}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('.bracket-choice-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            onChoose(btn.dataset.type);
+            overlay.remove();
+        });
+    });
+}
+
+/// מחבר טקסטאריה לרדיו-בוטונים של בחירת סוגריים: סוג יחיד → נבחר לבד;
+/// כמה סוגים → נשאלת שאלה (רק פעם אחת לכל תוכן שונה, לא בכל הקשה).
+function wireAutoBracketDetection(textareaId, radioGroupName){
+    const textarea = document.getElementById(textareaId);
+    if (!textarea) return;
+    let lastSignature = '';
+    let debounceTimer = null;
+
+    textarea.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            const text = textarea.value;
+            const types = detectBracketTypes(text);
+            const signature = types.join(',');
+            if (!types.length || signature === lastSignature) return;
+            lastSignature = signature;
+
+            const setBracket = (type) => {
+                const radio = document.querySelector(`input[name="${radioGroupName}"][value="${type}"]`);
+                if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+            };
+
+            if (types.length === 1) {
+                setBracket(types[0]);
+            } else {
+                showBracketChoiceModal(types, setBracket);
+            }
+        }, 500);
+    });
+}
+
+wireAutoBracketDetection('pasteTextArea', 'brackets');
+wireAutoBracketDetection('biblioText', 'biblioBrackets');

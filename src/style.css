@@ -1776,3 +1776,52 @@ mark.focus-mark {
 .ai-word.added { background: var(--green-dim); color: var(--green); font-weight: 700; }
 .ai-word.bracket { background: var(--gold-dim); color: var(--gold-light); font-weight: 700; border: 1px solid var(--gold-border); }
 .ai-word.user-hidden { opacity: 0.25; text-decoration: line-through; }
+
+/* ── מסכם טקסט חכם ── */
+.sum-topics-list { list-style: none; }
+.sum-topics-list li {
+    display: flex; align-items: baseline; gap: 10px; padding: 10px 0;
+    border-bottom: 1px solid var(--border); font-size: 1rem; line-height: 1.6;
+}
+.sum-topics-list li:last-child { border-bottom: none; }
+.sum-topic-num { font-weight: 700; color: var(--gold); font-size: 1.1rem; min-width: 24px; flex-shrink: 0; }
+
+.sum-tags-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 0.78rem; color: var(--text-2); }
+.sum-tags-legend span { display: flex; align-items: center; gap: 5px; }
+.sum-tags-legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.sum-legend-person::before { background: var(--teal, #2c5282); }
+.sum-legend-book::before   { background: var(--gold); }
+.sum-legend-place::before  { background: var(--green); }
+
+.sum-tags-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.sum-tag { padding: 4px 14px; border-radius: 4px; font-size: 0.88rem; font-weight: 600; border: 1px solid; }
+.sum-tag-person { background: rgba(44,82,130,0.1); border-color: rgba(44,82,130,0.3); color: #4a7bb5; }
+.sum-tag-book   { background: var(--gold-dim); border-color: var(--gold-border); color: var(--gold-light); }
+.sum-tag-place  { background: var(--green-dim); border-color: rgba(45,106,79,0.3); color: var(--green); }
+
+.sum-summary-text {
+    font-size: 1.02rem; line-height: 2.1; color: var(--text); white-space: pre-wrap;
+    font-family: 'Frank Ruhl Libre', serif;
+}
+.sum-cursor::after { content: '|'; animation: sum-blink 0.8s step-end infinite; color: var(--gold); margin-right: 2px; }
+@keyframes sum-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── חלונית בחירת סוג סוגריים (זיהוי אוטומטי) ── */
+.bracket-choice-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center; z-index: 9999;
+    animation: bracket-fade-in 0.15s ease;
+}
+@keyframes bracket-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.bracket-choice-box {
+    background: var(--panel-bg); border: 1px solid var(--gold-border); border-radius: 14px;
+    padding: 24px 28px; max-width: 420px; box-shadow: var(--shadow-lg);
+}
+.bracket-choice-title { font-size: 0.95rem; color: var(--text); margin-bottom: 16px; text-align: center; line-height: 1.6; }
+.bracket-choice-opts { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.bracket-choice-btn {
+    padding: 10px 18px; border-radius: 8px; border: 1.5px solid var(--gold-border);
+    background: var(--gold-dim); color: var(--gold-light); font-weight: 700; font-size: 0.95rem;
+    cursor: pointer; transition: all 0.15s ease;
+}
+.bracket-choice-btn:hover { background: var(--gold); color: #1a1608; }

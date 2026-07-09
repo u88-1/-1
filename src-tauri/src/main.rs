@@ -695,7 +695,7 @@ fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
 // ════════════════════════════════════════════════════════════════════════════
 
 static RE_CHAPTER_MARK: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(פרק\s+[א-ת0-9]+['׳]?|סימן\s+[א-ת0-9]+['׳]?|חלק\s+[א-ת0-9]+['׳]?|הלכות\s+[א-ת]+)").unwrap()
+    Regex::new(r#"(פרק\s+[א-ת0-9]+(?:["״׳][א-ת0-9]+)?['׳]?|סימן\s+[א-ת0-9]+(?:["״׳][א-ת0-9]+)?['׳]?|חלק\s+[א-ת0-9]+(?:["״׳][א-ת0-9]+)?['׳]?|הלכות\s+[א-ת]+|פסקה\s+[א-ת0-9]+(?:["״׳][א-ת0-9]+)?['׳]?)"#).unwrap()
 });
 
 /// מפתח קיבוץ קנוני להפניה — מריץ את אותו צינור נרמול המשמש לחיפוש,
@@ -1052,6 +1052,47 @@ fn verify_biblio_sources(
     Ok(result)
 }
 
+const GEMINI_KEYRING_SERVICE: &str = "bodek-mekorot";
+const GEMINI_KEYRING_ACCOUNT: &str = "gemini_api_key";
+
+/// שמירת מפתח ה-Gemini API באחסון המוצפן של מערכת ההפעלה (Windows
+/// Credential Manager / macOS Keychain / Linux Secret Service) — לא
+/// ב-localStorage או קובץ טקסט גלוי. כך המשתמש לא צריך להדביק את
+/// המפתח מחדש בכל הפעלה, וגם לא נחשף לכל מי שיפתח את קבצי האפליקציה.
+#[tauri::command]
+fn save_gemini_key(key: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
+        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
+    entry
+        .set_password(&key)
+        .map_err(|e| format!("שגיאה בשמירת המפתח: {}", e))
+}
+
+/// טעינת מפתח ה-Gemini API השמור. מחזיר None אם עדיין לא נשמר מפתח
+/// (לא שגיאה — זה מצב תקין לפני שימוש ראשון).
+#[tauri::command]
+fn load_gemini_key() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
+        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
+    match entry.get_password() {
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("שגיאה בטעינת המפתח: {}", e)),
+    }
+}
+
+/// מחיקת מפתח ה-Gemini API השמור (למשל אם המשתמש רוצה להחליף מפתח
+/// או להסיר אותו לגמרי מהמחשב).
+#[tauri::command]
+fn delete_gemini_key() -> Result<(), String> {
+    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
+        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
+    match entry.delete_password() {
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("שגיאה במחיקת המפתח: {}", e)),
+    }
+}
+
 /// קריאה ל-Gemini API דרך Rust במקום fetch() בצד ה-JS.
 /// למה: Google לא בהכרח שולחת כותרות CORS שמתירות מקורות מסוג
 /// tauri://‎ (בניגוד לדפדפן רגיל עם מקור http/https) - גם אם ה-CSP
@@ -1063,7 +1104,13 @@ fn verify_biblio_sources(
 /// שאר ההיגיון (זיהוי חסימה/quota/מפתח לא תקין) הועבר לכאן במדויק
 /// מהקוד שהיה ב-JS, בלי שינוי בתוכן ההודעות.
 #[tauri::command]
-async fn call_gemini(prompt: String, api_key: String, model: String) -> Result<String, String> {
+async fn call_gemini(
+    prompt: String,
+    api_key: String,
+    model: String,
+    temperature: Option<f64>,
+    max_output_tokens: Option<i64>,
+) -> Result<String, String> {
     if api_key.trim().is_empty() {
         return Err("מפתח API ריק".to_string());
     }
@@ -1072,9 +1119,22 @@ async fn call_gemini(prompt: String, api_key: String, model: String) -> Result<S
         model, api_key
     );
     let client = reqwest::Client::new();
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }]
     });
+    // generationConfig אופציונלי — נדרש לכלי הסיכום (temperature נמוך ליציבות,
+    // maxOutputTokens גבוה לסיכומים ארוכים). כשלא מסופק, Gemini משתמש בברירת
+    // המחדל שלו (זהה להתנהגות הקודמת של עורך ה-AI, שלא שולח generationConfig כלל).
+    if temperature.is_some() || max_output_tokens.is_some() {
+        let mut cfg = serde_json::Map::new();
+        if let Some(t) = temperature {
+            cfg.insert("temperature".to_string(), serde_json::json!(t));
+        }
+        if let Some(m) = max_output_tokens {
+            cfg.insert("maxOutputTokens".to_string(), serde_json::json!(m));
+        }
+        body["generationConfig"] = serde_json::Value::Object(cfg);
+    }
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -2793,7 +2853,10 @@ fn main() {
             analyze_bibliography,
             edit_biblio_context,
             verify_biblio_sources,
-            call_gemini
+            call_gemini,
+            save_gemini_key,
+            load_gemini_key,
+            delete_gemini_key
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
