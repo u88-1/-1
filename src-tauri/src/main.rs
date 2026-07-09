@@ -496,7 +496,7 @@ fn generate_variants(reference: &str) -> Vec<String> {
     // אם "דף" הוסר, הוסף גם את הגרסה המקורית כוריאנט ראשון
     let mut order: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut push = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
+    let push = |v: String, order: &mut Vec<String>, seen: &mut HashSet<String>| {
         if seen.insert(v.clone()) {
             order.push(v);
         }
@@ -1087,7 +1087,7 @@ fn load_gemini_key() -> Result<Option<String>, String> {
 fn delete_gemini_key() -> Result<(), String> {
     let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
         .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
-    match entry.delete_password() {
+    match entry.delete_credential() {
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("שגיאה במחיקת המפתח: {}", e)),
     }

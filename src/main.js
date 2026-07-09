@@ -1288,6 +1288,59 @@ async function wireGeminiKeyInput(inputEl){
     const aiApiKeyInput = document.getElementById('aiApiKey');
     wireGeminiKeyInput(aiApiKeyInput);
 
+    // ── הנחיה מותאמת אישית ────────────────────────────────────────────
+    // המשתמש יכול להוסיף כל בקשה חופשית (למשל "הוסף ניקוד") שמצטרפת
+    // להנחיה הבסיסית (לא מחליפה אותה) בכל הרצה. נשמרת בהגדרות כדי
+    // שלא תצטרך להזין אותה מחדש בכל פעם.
+    function updateAiInstructionHint(){
+        const val = (loadSettings().aiCustomInstruction || '').trim();
+        const hint = document.getElementById('aiInstructionHint');
+        hint.textContent = val ? `✓ הנחיה פעילה: "${val.length > 40 ? val.slice(0,40)+'…' : val}"` : '';
+    }
+    updateAiInstructionHint();
+
+    document.getElementById('aiBtnEditInstruction').addEventListener('click', () => {
+        const current = (loadSettings().aiCustomInstruction || '');
+        const existing = document.getElementById('instructionEditOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'instructionEditOverlay';
+        overlay.className = 'bracket-choice-overlay';
+        overlay.innerHTML = `
+            <div class="bracket-choice-box" style="max-width:520px;width:90%">
+                <div class="bracket-choice-title" style="text-align:right">הנחיה מותאמת אישית (מצטרפת להנחיה הבסיסית)</div>
+                <textarea id="instructionEditTextarea" class="paste-textarea" style="min-height:120px;margin-bottom:14px" placeholder="לדוגמה: הוסף ניקוד לכל המילים. או: כתוב בעברית מודרנית ולא ארכאית. או כל בקשה אחרת...">${escapeHtml(current)}</textarea>
+                <div class="bracket-choice-opts">
+                    <button class="biblio-mini-btn primary" id="instructionSaveBtn">שמור</button>
+                    <button class="biblio-mini-btn" id="instructionClearBtn">נקה הנחיה</button>
+                    <button class="biblio-mini-btn" id="instructionCancelBtn">בטל</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        document.getElementById('instructionEditTextarea').focus();
+
+        document.getElementById('instructionCancelBtn').addEventListener('click', () => overlay.remove());
+        document.getElementById('instructionClearBtn').addEventListener('click', () => {
+            const ns = loadSettings();
+            delete ns.aiCustomInstruction;
+            saveSettings(ns);
+            settings = ns;
+            updateAiInstructionHint();
+            overlay.remove();
+        });
+        document.getElementById('instructionSaveBtn').addEventListener('click', () => {
+            const val = document.getElementById('instructionEditTextarea').value.trim();
+            const ns = loadSettings();
+            ns.aiCustomInstruction = val;
+            saveSettings(ns);
+            settings = ns;
+            updateAiInstructionHint();
+            overlay.remove();
+        });
+    });
+
     const aiBtnRun = document.getElementById('aiBtnRun');
     aiBtnRun.onclick = async () => {
         const key = document.getElementById('aiApiKey').value.trim();
@@ -1308,7 +1361,16 @@ async function wireGeminiKeyInput(inputEl){
         aiStatusDiv.innerText = `מתחבר ל- ${model}...`;
 
         try {
-            const prompt = "אתה עורך תורני מומחה. בצע פיסוק לטקסט הבא והוסף מראה מקומות (תנ\"ך, גמרא, מדרש, רמב\"ם) בסוגריים מסולסלים {}. אל תשנה את המילים המקוריות, רק הוסף פיסוק ומקורות, וציטוטים תשים בתוך גרשיים תחילה וסוף. תוסיף כותרות נושא קצרות, בסיגנון ישיבתי ליטאי, בין 3 ל6 מילים בתוך סוגרים מרובעות, ותפתח ראשי תיבות (לא ראשי תיבות של ז\"ל זכרונו או זכרונם לברכה או ה' - השם, או הקב\"ה - הקדוש ברוך הוא) רק בתוך סוגרים עגולות, ולא לשנות מהטקסט את הפענוח בתוך סוגרים עגולות, וחלק פסקאות לפי נושאים בלבד אבל אל תשנה מהמילים המקוריות בכלל אל תוסיף כוכביות סימני שאלה וסולמיות.\n\n" + txt;
+            const basePrompt = "אתה עורך תורני מומחה. בצע פיסוק לטקסט הבא והוסף מראה מקומות (תנ\"ך, גמרא, מדרש, רמב\"ם) בסוגריים מסולסלים {}. אל תשנה את המילים המקוריות, רק הוסף פיסוק ומקורות, וציטוטים תשים בתוך גרשיים תחילה וסוף. תוסיף כותרות נושא קצרות, בסיגנון ישיבתי ליטאי, בין 3 ל6 מילים בתוך סוגרים מרובעות, ותפתח ראשי תיבות (לא ראשי תיבות של ז\"ל זכרונו או זכרונם לברכה או ה' - השם, או הקב\"ה - הקדוש ברוך הוא) רק בתוך סוגרים עגולות, ולא לשנות מהטקסט את הפענוח בתוך סוגרים עגולות, וחלק פסקאות לפי נושאים בלבד אבל אל תשנה מהמילים המקוריות בכלל אל תוסיף כוכביות סימני שאלה וסולמיות.";
+            // הנחיה מותאמת אישית — אם המשתמש הגדיר אחת (דרך "⚙️ הנחיה
+            // מותאמת אישית"), היא מצטרפת להנחיה הבסיסית ולא מחליפה אותה,
+            // כך שהכללים הבסיסיים (לא לשנות מילים, לא להוסיף כוכביות וכו')
+            // תמיד נשמרים גם אם המשתמש מוסיף בקשה נוספת (כמו ניקוד).
+            const customInstruction = (loadSettings().aiCustomInstruction || '').trim();
+            const fullInstruction = customInstruction
+                ? `${basePrompt}\n\nהנחיה נוספת מהמשתמש (בצע גם אותה):\n${customInstruction}`
+                : basePrompt;
+            const prompt = fullInstruction + "\n\n" + txt;
 
             // invoke דרך Rust במקום fetch() ישיר מה-JS — עוקף לחלוטין את
             // חסימת ה-CORS שה-webview עלול להטיל על תגובות מ-Google (זו
