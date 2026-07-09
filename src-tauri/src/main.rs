@@ -1118,7 +1118,15 @@ async fn call_gemini(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
     );
-    let client = reqwest::Client::new();
+    // קריטי: בלי timeout מפורש, בקשה שנתקעת ברשת (לא שגיאה - סתם
+    // תגובה שלא מגיעה) הייתה יכולה להיתלות לנצח, כשהמשתמש רואה רק
+    // "מתחבר..." שלעולם לא מסתיים ובלי שום הודעת שגיאה. 90 שניות
+    // נותנות מרווח סביר לטקסטים ארוכים/maxOutputTokens גבוה (כמו
+    // במסכם הטקסט), אך עדיין מבטיחות שהמשתמש יקבל תשובה כלשהי.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|e| format!("שגיאה באתחול לקוח הרשת: {}", e))?;
     let mut body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }]
     });
@@ -1141,7 +1149,15 @@ async fn call_gemini(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("שגיאת רשת בפנייה ל-Gemini: {}", e))?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                "פג הזמן הקצוב לתגובה מ-Gemini (90 שניות).\nייתכן שהטקסט ארוך מדי, או שהחיבור לאינטרנט איטי/לא זמין כרגע. נסה שוב, או קצר את הטקסט.".to_string()
+            } else if e.is_connect() {
+                "לא ניתן להתחבר ל-Gemini — בדוק את חיבור האינטרנט שלך.".to_string()
+            } else {
+                format!("שגיאת רשת בפנייה ל-Gemini: {}", e)
+            }
+        })?;
 
     let data: serde_json::Value = response
         .json()
