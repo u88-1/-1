@@ -1263,17 +1263,24 @@ async function wireGeminiKeyInput(inputEl){
     } catch (e) {
         console.warn('לא ניתן היה לטעון מפתח Gemini שמור:', e);
     }
-    inputEl.addEventListener('change', async () => {
-        const val = inputEl.value.trim();
-        try {
-            if (val) {
-                await invoke('save_gemini_key', { key: val });
-            } else {
-                await invoke('delete_gemini_key');
+    // קריטי: 'input' (לא 'change') כדי לשמור מיד עם כל הקלדה/הדבקה,
+    // בלי להסתמך על blur — 'change' לא תמיד מספיק להיווצר לפני
+    // שהמשתמש כבר לוחץ על כפתור ההרצה (למשל בהדבקה מהירה + Enter/קליק).
+    let saveDebounce = null;
+    inputEl.addEventListener('input', () => {
+        clearTimeout(saveDebounce);
+        saveDebounce = setTimeout(async () => {
+            const val = inputEl.value.trim();
+            try {
+                if (val) {
+                    await invoke('save_gemini_key', { key: val });
+                } else {
+                    await invoke('delete_gemini_key');
+                }
+            } catch (e) {
+                console.warn('לא ניתן היה לשמור את מפתח Gemini:', e);
             }
-        } catch (e) {
-            console.warn('לא ניתן היה לשמור את מפתח Gemini:', e);
-        }
+        }, 400);
     });
 }
 
@@ -1349,6 +1356,11 @@ async function wireGeminiKeyInput(inputEl){
 
         if(!txt) { alert("אנא הכנס טקסט לתיבה הימנית"); return; }
         if(!key) { alert("אנא הכנס מפתח API של Gemini"); return; }
+
+        // רשת ביטחון — שמירה מפורשת עכשיו, בלי קשר לתזמון ה-debounce
+        // של wireGeminiKeyInput (מונע מצב שבו מדביקים מפתח ומיד לוחצים
+        // הרצה לפני שהשמירה האוטומטית הספיקה לרוץ).
+        invoke('save_gemini_key', { key }).catch(() => {});
 
         // מניעת שליחה כפולה — נועל את הכפתור עד לסיום הבקשה (הצלחה או כישלון)
         const origBtnHtml = aiBtnRun.innerHTML;
@@ -1513,6 +1525,8 @@ async function wireGeminiKeyInput(inputEl){
         if (!document.getElementById('sumApiKey').value.trim()) { sumShowError('נא להזין מפתח API.'); return; }
         if (!text) { sumShowError('נא להדביק טקסט לסיכום.'); return; }
         if (text.length < 30) { sumShowError('הטקסט קצר מדי לסיכום.'); return; }
+
+        invoke('save_gemini_key', { key: document.getElementById('sumApiKey').value.trim() }).catch(() => {});
 
         sumLastText = text;
         btn.disabled = true;
@@ -1742,9 +1756,10 @@ function showBracketChoiceModal(types, onChoose){
 
 /// מחבר טקסטאריה לרדיו-בוטונים של בחירת סוגריים: סוג יחיד → נבחר לבד;
 /// כמה סוגים → נשאלת שאלה (רק פעם אחת לכל תוכן שונה, לא בכל הקשה).
-function wireAutoBracketDetection(textareaId, radioGroupName){
+function wireAutoBracketDetection(textareaId, radioGroupName, hintId){
     const textarea = document.getElementById(textareaId);
     if (!textarea) return;
+    const hintEl = hintId ? document.getElementById(hintId) : null;
     let lastSignature = '';
     let debounceTimer = null;
 
@@ -1760,6 +1775,10 @@ function wireAutoBracketDetection(textareaId, radioGroupName){
             const setBracket = (type) => {
                 const radio = document.querySelector(`input[name="${radioGroupName}"][value="${type}"]`);
                 if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+                if (hintEl) {
+                    hintEl.textContent = `✓ זוהה אוטומטית: ${BRACKET_LABELS[type]}`;
+                    setTimeout(() => { if (hintEl.textContent.startsWith('✓')) hintEl.textContent = ''; }, 4000);
+                }
             };
 
             if (types.length === 1) {
@@ -1771,5 +1790,5 @@ function wireAutoBracketDetection(textareaId, radioGroupName){
     });
 }
 
-wireAutoBracketDetection('pasteTextArea', 'brackets');
-wireAutoBracketDetection('biblioText', 'biblioBrackets');
+wireAutoBracketDetection('pasteTextArea', 'brackets', 'bracketsAutoHint');
+wireAutoBracketDetection('biblioText', 'biblioBrackets', 'biblioBracketsAutoHint');

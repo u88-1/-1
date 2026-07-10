@@ -45,7 +45,7 @@
                 הגדרות
             </a>
         </nav>
-        <div class="sidebar-bottom">v4.4.2 · U88-1 · Tauri</div>
+        <div class="sidebar-bottom">v4.4.3 · U88-1 · Tauri</div>
     </aside>
 
     <main class="main">
@@ -91,6 +91,7 @@
                         <label class="bracket-opt"><input type="radio" name="brackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
                         <label class="bracket-opt"><input type="radio" name="brackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
                     </div>
+                    <span id="bracketsAutoHint" class="field-hint" style="margin:0 8px"></span>
                 </div>
                 <button id="runButton" class="run-btn">
                     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
@@ -160,6 +161,7 @@
                         <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
                         <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
                     </div>
+                    <span id="biblioBracketsAutoHint" class="field-hint" style="margin:0 8px"></span>
                 </div>
                 <button id="biblioRunBtn" class="run-btn">
                     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
@@ -399,7 +401,7 @@
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
                 <div class="about-title">בודק מקורות</div>
-                <div class="about-version" id="aboutVersionDisplay">גרסה 4.4.2 · U88-1 · Tauri</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.4.3 · U88-1 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
@@ -410,18 +412,81 @@
                     <div class="changelog-title">📋 שינויי גרסאות</div>
                     <div class="changelog-list" id="changelogList">
                         <div class="changelog-item">
-                            <div class="changelog-ver">v4.4.2 — נוכחי</div>
+                            <div class="changelog-ver">v4.4.3 — נוכחי</div>
+                            <ul>
+                                <li>תיקון: מפתח Gemini לא תמיד נשמר (הוחלף לשמירה על כל הקלדה + רשת ביטחון לפני הרצה)</li>
+                                <li>תיקון: זיהוי "חלק"/"פרק" תפס בטעות ביטויים רגילים כמו "חלק לעולם הבא"</li>
+                                <li>אישור ויזואלי כשזוהה סוג סוגריים אוטומטית</li>
+                                <li>יומן שינויים מלא וגלילה בעמוד אודות</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.2</div>
+                            <ul>
+                                <li>Timeout של 90 שניות לקריאות Gemini — מונע תקיעה שקטה ללא הודעה</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.1</div>
+                            <ul>
+                                <li>תיקון API של keyring שגרם לכשל build</li>
+                                <li>הנחיה מותאמת אישית בעורך ה-AI (למשל "הוסף ניקוד") — מצטרפת להנחיה הבסיסית, נשמרת בין הפעלות</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.0</div>
+                            <ul>
+                                <li>טאב חדש: מסכם טקסט חכם — נושאים, שמות/מקורות, סיכום בסגנון ישיבתי, שאלות-תשובה</li>
+                                <li>מפתח Gemini נשמר מוצפן ב-Credential Manager, לא בטקסט גלוי</li>
+                                <li>זיהוי "פסקה X" כמיקום בניתוח ביבליוגרפי</li>
+                                <li>זיהוי אוטומטי של סוג סוגריים בעת הדבקת טקסט</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.3.0 – v4.3.3</div>
+                            <ul>
+                                <li>טאב חדש: עורך AI — פיסוק ומקורות (Gemini)</li>
+                                <li>קריאות Gemini הועברו לצד Rust — עוקף חסימת CORS ("Failed to fetch")</li>
+                                <li>טיפול בתגובה חסומה/ריקה, מניעת שליחה כפולה</li>
+                                <li>עמודת "אימות" מאוחדת בניתוח ביבליוגרפי — לחיצה פותחת ישירות באוצריא</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.2.9</div>
+                            <ul>
+                                <li>32 בדיקות אוטומטיות (cargo test), רצות ב-CI לפני כל build</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.2.4 – v4.2.8</div>
+                            <ul>
+                                <li>זיהוי דף/עמוד גמרא בכל צורות הכתיב (ע"א/ע"ב, אות בודדת, נקודתיים, גרשיים בתוך מספר הדף)</li>
+                                <li>פורמט he_ref אמיתי אושר מול נתוני ה-DB (אותיות עבריות, לא ספרות)</li>
+                                <li>תמיכה בתלמוד ירושלמי ואימות מקורות מול המאגר בפועל</li>
+                                <li>תיקון קריטי: מיון תוצאות לפי איכות התאמה (מדויק/קידומת/חלקי)</li>
+                                <li>תיקון רקע html מול body במצב יום</li>
+                                <li>ניתוח ביבליוגרפי: חיפוש/סינון/מיון, פילוח לפי פרק</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.6</div>
+                            <ul>
+                                <li>תמיכה בסכמת DB חדשה (tocEntryId, charCount)</li>
+                                <li>תיקון קריסה (panic) בחיפוש קיצורי מסכתות</li>
+                                <li>הגנה על ספרי תנ"ך/שו"ע/רמב"ם מהמרת גימטריה שגויה</li>
+                                <li>תיקון תיוג שגוי (exact) של מנוע Tantivy</li>
+                                <li>טאב חדש: ניתוח ביבליוגרפי (סטטיסטיקה, ענן מקורות, קשרים)</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.1 – v4.1.5</div>
                             <ul>
                                 <li>הגדלה/הקטנה של גודל הכתב בתוצאות</li>
                                 <li>מצב יום ומצב לילה</li>
                                 <li>תיקון פתח באוצריא — מיקום מדויק</li>
-                                <li>מקורות נוספים מגיעים סגורים עם כפתור הרחב</li>
-                                <li>סימון תוצאות במרקר צהוב</li>
                                 <li>תצוגה מצומצמת לדפים גדולים (2 שורות + הרחב)</li>
-                                <li>חיפוש בתוצאות עצמן (חלונית צד)</li>
-                                <li>אימות טקסט מהיר (הדבקה ללא קובץ)</li>
+                                <li>חיפוש בתוצאות עצמן, אימות טקסט מהיר (הדבקה ללא קובץ)</li>
                                 <li>הגדרת כמות תוצאות לעמוד (pagination)</li>
-                                <li>כיתוב מרוכז וסגירה מלאה של האפליקציה</li>
                             </ul>
                         </div>
                         <div class="changelog-item">

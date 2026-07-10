@@ -1664,6 +1664,15 @@ mark.focus-mark {
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
 }
+.changelog-list {
+    max-height: 340px;
+    overflow-y: auto;
+    padding-left: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--gold-dim);
+}
 .changelog-item {
     margin-bottom: 14px;
 }
