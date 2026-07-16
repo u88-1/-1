@@ -1,6 +1,145 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// ════════════════════════════════════════════════════════════════════
+//  🔍 מודול חיפוש חכם — קיצורים, וריאציות, ציון ביטחון
+// ════════════════════════════════════════════════════════════════════
+
+const ABBREV_MAP = {
+    // ש"ס בבלי
+    'ב"ק': 'בבא קמא', "ב'ק": 'בבא קמא',
+    'ב"מ': 'בבא מציעא', "ב'מ": 'בבא מציעא',
+    'ב"ב': 'בבא בתרא', "ב'ב": 'בבא בתרא',
+    'ר"ה': 'ראש השנה',
+    'מו"ק': 'מועד קטן',
+    'ע"ז': 'עבודה זרה',
+    // שו"ע
+    'או"ח': 'אורח חיים', "אוח": 'אורח חיים',
+    'יו"ד': 'יורה דעה',
+    'אה"ע': 'אבן העזר', 'אבה"ע': 'אבן העזר',
+    'חו"מ': 'חושן משפט',
+    // מדרש רבה
+    'ב"ר': 'בראשית רבה', 'בר"ר': 'בראשית רבה',
+    'שמ"ר': 'שמות רבה',
+    'ויק"ר': 'ויקרא רבה',
+    'במ"ר': 'במדבר רבה', 'במד"ר': 'במדבר רבה',
+    'דב"ר': 'דברים רבה',
+    'שה"ש': 'שיר השירים', 'שה"ש רבה': 'שיר השירים רבה',
+    'אי"ר': 'איכה רבה',
+    'קה"ר': 'קהלת רבה',
+    'אס"ר': 'אסתר רבה',
+    // קיצורי שם בסוף (גרש)
+    "ברכ'": 'ברכות', "שב'": 'שבת', "עירו'": 'עירובין',
+    "פסח'": 'פסחים', "תענ'": 'תענית', "מגיל'": 'מגילה',
+    "חגיג'": 'חגיגה', "יבמ'": 'יבמות', "כתוב'": 'כתובות',
+    "נדר'": 'נדרים', "גיט'": 'גיטין', "קיד'": 'קידושין',
+    "סנה'": 'סנהדרין', "שבוע'": 'שבועות', "זבח'": 'זבחים',
+    "מנח'": 'מנחות', "חול'": 'חולין', "בכור'": 'בכורות',
+    "כרית'": 'כריתות',
+    // רמב"ם
+    'רמב"ם': 'רמב"ם', 'רמבם': 'רמב"ם',
+    // ישעיהו/ירמיהו קיצור
+    "ישעיה": 'ישעיהו', "ירמיה": 'ירמיהו',
+};
+
+// מילון וריאציות כתיב נפוצות
+const SPELLING_VARIANTS = {
+    'שבת': ['שבת', 'שַׁבָּת'],
+    'ברכות': ['ברכות', 'ברכת'],
+    'סנהדרין': ['סנהדרין', 'סנהדרן'],
+    'פסחים': ['פסחים', 'פסחין'],
+    'תהלים': ['תהלים', 'תהילים'],
+    'ישעיהו': ['ישעיהו', 'ישעיה'],
+    'ירמיהו': ['ירמיהו', 'ירמיה'],
+};
+
+/**
+ * מרחיב שאילתת חיפוש: מפתח קיצורים, מוסיף וריאציות כתיב.
+ * מחזיר מערך של כל הצורות שיש לחפש.
+ */
+function expandSearchQuery(q) {
+    const forms = new Set();
+    const base = q.trim();
+    forms.add(base);
+    forms.add(base.toLowerCase());
+
+    // פתח קיצורים ידועים
+    for (const [abbr, full] of Object.entries(ABBREV_MAP)) {
+        if (base.includes(abbr)) {
+            forms.add(base.replace(abbr, full));
+            forms.add(full);
+        }
+        // גם הפוך: אם מחפשים שם מלא, הוסף קיצור
+        if (base.includes(full)) {
+            forms.add(base.replace(full, abbr));
+        }
+    }
+
+    // וריאציות כתיב
+    for (const [canonical, variants] of Object.entries(SPELLING_VARIANTS)) {
+        for (const v of variants) {
+            if (base.includes(v)) {
+                for (const other of variants) {
+                    forms.add(base.replace(v, other));
+                }
+            }
+        }
+    }
+
+    // נרמול: הסר ניקוד, גרשיים מיותרים
+    forms.add(base.replace(/[\u0591-\u05C7]/g, '')); // ניקוד
+    forms.add(base.replace(/['"״׳]/g, ''));
+
+    return [...forms].filter(Boolean);
+}
+
+/**
+ * חיפוש חכם: בודק אם item תואם לשאילתה, כולל קיצורים ווריאציות.
+ * מחזיר ציון 0–1 (0 = לא נמצא, 1 = התאמה מושלמת).
+ */
+function smartSearchScore(item, query) {
+    if (!query || query.length < 2) return 1;
+    const forms = expandSearchQuery(query.toLowerCase());
+
+    const textFields = [
+        item.ref || '',
+        item.sentence || '',
+        ...(item.rows || []).map(r => (r.bookTitle || '') + ' ' + (r.heRef || '') + ' ' + (r.content || '')),
+    ].join(' ').toLowerCase();
+
+    for (const form of forms) {
+        if (textFields.includes(form)) {
+            // ציון לפי עדיפות: התאמה ישירה לשם ההפניה = 1.0, לשאר = 0.7
+            if ((item.ref || '').toLowerCase().includes(form)) return 1.0;
+            return 0.7;
+        }
+    }
+    return 0;
+}
+
+/**
+ * חישוב ציון ביטחון (confidence) לתוצאה — 0–100
+ */
+function calcConfidence(item) {
+    if (!item.rows?.length) return 0;
+    const mt = item.matchType;
+    const baseScore = { exact: 95, prefix: 72, fuzzy: 45, sefaria: 60, none: 0 }[mt] ?? 0;
+    if (baseScore === 0) return 0;
+    // בונוס אם יש יותר מתוצאה אחת (מעיד על מקור מוכר היטב)
+    const multiBonus = Math.min(item.rows.length - 1, 3) * 1.5;
+    return Math.min(100, Math.round(baseScore + multiBonus));
+}
+
+/**
+ * מחזיר צבע/תווית לציון הביטחון
+ */
+function confidenceMeta(score) {
+    if (score >= 90) return { cls: 'conf-high', label: score + '%' };
+    if (score >= 60) return { cls: 'conf-mid',  label: score + '%' };
+    if (score >  0)  return { cls: 'conf-low',  label: score + '%' };
+    return { cls: 'conf-none', label: '—' };
+}
+
 // ── Tantivy index check + build ──────────────────────────────────────────
 async function checkAndShowIndexStatus() {
     const dbPath = document.getElementById('dbPath').value.trim();
@@ -352,24 +491,40 @@ function markRefInSentence(sentence,ref){
     return esc(sentence).replace(new RegExp('[{\\[(]'+escaped+'[}\\])]','g'),'<span class="ref-in-sentence">$&</span>');
 }
 function badgeHtml(mt){
-    const labels={exact:'✓ מדויק',prefix:'✓ קידומת',fuzzy:'✓ חלקי',sefaria:'✓ Sefaria 🌐',none:'✗ לא נמצא'};
+    const labels={exact:'✓ מדויק',prefix:'≈ קידומת',fuzzy:'~ חלקי',sefaria:'🌐 Sefaria',none:'✗ לא נמצא'};
+    const titles={
+        exact:'התאמה מדויקת ל-he_ref במאגר',
+        prefix:'התאמה לפי קידומת (מכסה את הדף/פרק)',
+        fuzzy:'התאמה חלקית / FTS',
+        sefaria:'נמצא דרך Sefaria.org',
+        none:'לא נמצאה התאמה במאגר ובSefaria'
+    };
     const cls={exact:'badge-found',prefix:'badge-partial',fuzzy:'badge-partial',sefaria:'badge-sefaria',none:'badge-missing'};
     const t=mt||'none';
-    return`<span class="badge ${cls[t]||'badge-missing'}">${labels[t]||t}</span>`;
+    return`<span class="badge ${cls[t]||'badge-missing'}" title="${titles[t]||''}">${labels[t]||t}</span>`;
 }
 
 // ── בניית כרטיס תוצאה ────────────────────────────────
 function buildCompareCard(item,idx){
     const badge=badgeHtml(item.matchType);
+    const confidence=calcConfidence(item);
+    const confMeta=confidenceMeta(confidence);
+    const confBadge=`<span class="conf-badge ${confMeta.cls}" title="ציון ביטחון: ${confMeta.label}">🎯 ${confMeta.label}</span>`;
     const sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
 
     if(!item.rows?.length){
         return`<div class="ccard ccard-missing" id="card-${idx}">
-            <div class="ccard-ref-row"><span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}</div>
+            <div class="ccard-ref-row">
+                <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}${confBadge}
+            </div>
             <div class="ccard-cols">
                 <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
                 <div class="ccard-divider"></div>
-                <div class="ccard-db ccard-db-missing"><div class="ccard-section-label">🗄 מהמאגר</div><div class="ccard-not-found">לא נמצא</div></div>
+                <div class="ccard-db ccard-db-missing">
+                    <div class="ccard-section-label">🗄 מהמאגר</div>
+                    <div class="ccard-not-found">לא נמצא</div>
+                    <div class="missing-hint">💡 נסה: <a href="#" class="missing-sefaria-link" data-ref="${esc(item.ref)}" target="_blank">חפש ב-Sefaria</a></div>
+                </div>
             </div>
         </div>`;
     }
@@ -382,12 +537,20 @@ function buildCompareCard(item,idx){
         if(contentSearchQuery.length>=2){
             contentHtml=highlightContent(contentHtml,contentSearchQuery);
         }
+        // הדגש גם את מילות החיפוש של הפילטר בתוכן
+        if(filterQuery.length>=2){
+            const fqForms=expandSearchQuery(filterQuery);
+            for(const form of fqForms){
+                if(form.length>=2)contentHtml=highlightContent(contentHtml,form);
+            }
+        }
 
         // תוצאות נוספות (ri>0) — מגיעות סגורות
         const isExtra=ri>0;
-        const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 פתח ב-Sefaria</a>`:'';
-        const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 הרחב לדף מלא</button>`:'';
-        const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" data-book-id="${row.bookId??''}" title="פתח את המקום הזה ישירות באוצריא">📚 פתח באוצריא</button>`:'';
+        const sefariaLink=row.sefariaUrl?`<a class="sefaria-link" href="${esc(row.sefariaUrl)}" target="_blank" rel="noopener">🔗 Sefaria</a>`:'';
+        const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 דף מלא</button>`:'';
+        const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" data-book-id="${row.bookId??''}" title="פתח ישירות באוצריא">📚 אוצריא</button>`:'';
+        const copyBtn=`<button class="copy-citation-btn" data-action="copy-citation" data-ref="${esc(item.ref)}" data-book="${esc(row.bookTitle)}" data-heref="${esc(row.heRef)}" data-content="${esc((rawContent||'').substring(0,200))}" title="העתק ציטוט">📋</button>`;
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
 
         if(isExtra){
@@ -396,11 +559,9 @@ function buildCompareCard(item,idx){
                     <span class="book-name">${highlight(row.bookTitle,filterQuery)}</span>
                     <span class="db-heref">📌 ${highlight(row.heRef,filterQuery)}</span>
                     <span class="match-label match-${row.matchType||item.matchType}">${typeLabel}</span>
-                    ${sefariaLink}
+                    <div class="db-match-actions">${sefariaLink}${expandBtn}${otzariaBtn}${copyBtn}</div>
                 </div>
                 <div class="db-content" dir="rtl">${contentHtml}</div>
-                ${expandBtn}
-                ${otzariaBtn}
                 <div class="page-expand-area" id="page-${idx}-${ri}" style="display:none"></div>
             </div>`;
         }
@@ -410,22 +571,20 @@ function buildCompareCard(item,idx){
                 <span class="book-name">${highlight(row.bookTitle,filterQuery)}</span>
                 <span class="db-heref">📌 ${highlight(row.heRef,filterQuery)}</span>
                 <span class="match-label match-${row.matchType||item.matchType}">${typeLabel}</span>
-                ${sefariaLink}
+                <div class="db-match-actions">${sefariaLink}${expandBtn}${otzariaBtn}${copyBtn}</div>
             </div>
             <div class="db-content" dir="rtl">${contentHtml}</div>
-            ${expandBtn}
-            ${otzariaBtn}
             <div class="page-expand-area" id="page-${idx}-0" style="display:none"></div>
         </div>`;
     }).join('');
 
     const extraCount=item.rows.length-1;
-    const extraBtn=extraCount>0?`<button class="extra-results-btn" data-action="toggle-extra" data-card-idx="${idx}" data-extra-count="${extraCount}">▶ הצג עוד ${extraCount} תוצאות</button>`:'';
+    const extraBtn=extraCount>0?`<button class="extra-results-btn" data-action="toggle-extra" data-card-idx="${idx}" data-extra-count="${extraCount}">▶ עוד ${extraCount} תוצאות</button>`:'';
 
     return`<div class="ccard" id="card-${idx}">
         <div class="ccard-ref-row">
-            <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}
-            ${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}
+            <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>
+            <div class="ccard-badges">${badge}${confBadge}${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}</div>
         </div>
         <div class="ccard-cols">
             <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
@@ -458,8 +617,8 @@ function renderToolbar(r){
     toolbar.id='resultsToolbar';toolbar.className='results-toolbar';
     toolbar.innerHTML=`
         <div class="toolbar-right">
-            <input id="filterInput" class="filter-input" type="text" placeholder="חפש הפניה, ספר..." />
-            <input id="contentSearchInput" class="filter-input content-search-input" type="text" placeholder="🔍 חפש בתוכן התוצאות..." title="חיפוש בתוכן עצמו (לא רק בשם ההפניה)" />
+            <input id="filterInput" class="filter-input" type="text" placeholder='חפש: "ב"ק" → בבא קמא, "ישעיה" → ישעיהו...' title="חיפוש חכם: מזהה קיצורים, וריאציות כתיב ועוד" />
+            <input id="contentSearchInput" class="filter-input content-search-input" type="text" placeholder="🔍 חפש בתוכן התוצאות..." title="חיפוש בתוכן המאגר עצמו (לא רק שם ההפניה)" />
             <div class="filter-tabs">
                 <button class="filter-tab active" data-status="all">הכל <span class="tab-count">${r.results.length}</span></button>
                 <button class="filter-tab" data-status="found">נמצאו <span class="tab-count s-found">${r.foundCount}</span></button>
@@ -507,19 +666,20 @@ function getFilteredResults(){
         const found=item.rows?.length>0;
         if(filterStatus==='found'&&!found)return false;
         if(filterStatus==='missing'&&found)return false;
-        // סינון לפי שם הפניה/ספר
+        // חיפוש חכם — כולל קיצורים ווריאציות כתיב
         let passName=true;
         if(q){
-            passName=item.ref.toLowerCase().includes(q)||
-               item.sentence?.toLowerCase().includes(q)||
-               item.rows?.some(r=>(r.bookTitle||'').toLowerCase().includes(q)||(r.heRef||'').toLowerCase().includes(q));
+            passName = smartSearchScore(item, q) > 0;
         }
-        // סינון לפי תוכן (content search)
+        // סינון לפי תוכן (content search) — גם עם חיפוש חכם
         let passContent=true;
         if(cq){
-            passContent=item.rows?.some(r=>(r.content||'').toLowerCase().includes(cq))||
-                        item.sentence?.toLowerCase().includes(cq)||
-                        item.ref.toLowerCase().includes(cq);
+            const cqForms = expandSearchQuery(cq);
+            passContent = cqForms.some(form =>
+                item.rows?.some(r=>(r.content||'').toLowerCase().includes(form)) ||
+                item.sentence?.toLowerCase().includes(form) ||
+                item.ref.toLowerCase().includes(form)
+            );
         }
         return passName&&passContent;
     });
@@ -792,6 +952,26 @@ document.addEventListener('click',(e)=>{
         const expandBtn=el.closest('.db-match,.db-match-extra')?.querySelector('.expand-page-btn');
         if(expandBtn)expandBtn.textContent='📖 הרחב לדף מלא';
 
+    }else if(action==='copy-citation'){
+        // העתק ציטוט מעוצב: "שם הפניה (ספר, he_ref): תוכן..."
+        const ref=el.dataset.ref||'';
+        const book=el.dataset.book||'';
+        const heref=el.dataset.heref||'';
+        const content=el.dataset.content||'';
+        const citation=`${ref} (${book}${heref&&heref!==ref?', '+heref:''})${content?': '+content:''}`;
+        navigator.clipboard.writeText(citation).then(()=>{
+            const orig=el.textContent;
+            el.textContent='✅';
+            setTimeout(()=>{el.textContent=orig;},1500);
+        }).catch(()=>{
+            // fallback
+            const ta=document.createElement('textarea');
+            ta.value=citation;document.body.appendChild(ta);ta.select();
+            document.execCommand('copy');document.body.removeChild(ta);
+            const orig=el.textContent;el.textContent='✅';
+            setTimeout(()=>{el.textContent=orig;},1500);
+        });
+
     }else if(action==='export'){
         exportData(el.dataset.format);
 
@@ -805,6 +985,16 @@ document.addEventListener('click',(e)=>{
     }else if(action==='load-history'){
         loadFromHistory(Number(el.dataset.index));
     }
+});
+
+// ── לינק Sefaria ל"לא נמצא" ──────────────────────────
+document.addEventListener('click',e=>{
+    const a=e.target.closest('.missing-sefaria-link');
+    if(!a)return;
+    e.preventDefault();
+    const ref=a.dataset.ref||'';
+    const sefariaSearch='https://www.sefaria.org/search?q='+encodeURIComponent(ref)+'&lang=he';
+    window.open(sefariaSearch,'_blank','noopener');
 });
 
 loadSettingsUI();
