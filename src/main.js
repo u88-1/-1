@@ -1045,105 +1045,151 @@ document.addEventListener('click',(e)=>{
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-//  🔍 חיפוש באוצריא — חלון מוטמע
+//  🔍 Spotlight — חיפוש גלובלי באוצריא (Ctrl+K)
 // ════════════════════════════════════════════════════════════════════════════
 
-let otzariaSearchActive = false;
+(function initOtzariaSpotlight() {
+    const overlay   = document.getElementById('otzSpotlightOverlay');
+    const input     = document.getElementById('otzSpotlightInput');
+    const statusEl  = document.getElementById('otzSpotlightStatus');
+    const resultsEl = document.getElementById('otzSpotlightResults');
+    const trigger   = document.getElementById('otzSpotlightTrigger');
 
-async function runOtzariaSearch() {
-    const q = document.getElementById('otzariaSearchInput')?.value.trim();
-    if (!q) return;
-    if (otzariaSearchActive) return;
+    let searchTimer = null;
+    let activeIdx   = -1;
+    let lastResults = [];
+    let isSearching = false;
 
-    const statusEl  = document.getElementById('otzariaSearchStatus');
-    const resultsEl = document.getElementById('otzariaSearchResults');
-    const btn       = document.getElementById('otzariaSearchBtn');
-    const limit     = parseInt(document.getElementById('otzariaSearchLimit')?.value || '50');
-    const hintEl    = document.getElementById('otzariaFtsHint');
-    const dbPath    = document.getElementById('dbPath')?.value.trim() || settings.defaultDb || null;
-
-    otzariaSearchActive = true;
-    btn.disabled = true;
-    btn.textContent = '⏳ מחפש...';
-    statusEl.style.display = '';
-    statusEl.className = 'status-bar working';
-    statusEl.textContent = `מחפש "${q}" במסד הנתונים...`;
-    resultsEl.innerHTML = '';
-
-    try {
-        const rows = await invoke('fts_search', {
-            query: q,
-            dbPath: dbPath || null,
-            limit,
-        });
-
-        if (!rows.length) {
-            statusEl.className = 'status-bar';
-            statusEl.textContent = `לא נמצאו תוצאות עבור "${q}". נסה מונח אחר.`;
-            resultsEl.innerHTML = `<div class="empty-state"><div class="empty-icon">🔎</div><div>לא נמצאו תוצאות</div></div>`;
-            return;
-        }
-
-        statusEl.className = 'status-bar ok';
-        statusEl.textContent = `נמצאו ${rows.length} תוצאות עבור "${q}"`;
-
-        // הדגשת מונח החיפוש בתוכן
-        function hlOtz(text, term) {
-            if (!term || !text) return esc(text);
-            const parts = esc(text).split(new RegExp(`(${esc(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-            return parts.map((p, i) => i % 2 === 1 ? `<mark class="otz-hl">${p}</mark>` : p).join('');
-        }
-
-        const html = rows.map(row => {
-            const snippet = (row.content || '').substring(0, 400);
-            const sefariaUrl = row.heRef
-                ? `https://www.sefaria.org.il/${encodeURIComponent(row.heRef.replace(/\s/g, '_'))}`
-                : null;
-            return `<div class="otz-result-card">
-                <div class="otz-result-header">
-                    <span class="otz-book-name">${esc(row.bookTitle)}</span>
-                    <span class="otz-he-ref">📌 ${esc(row.heRef)}</span>
-                    <div class="otz-result-actions">
-                        ${sefariaUrl ? `<a class="sefaria-link" href="${sefariaUrl}" target="_blank" rel="noopener">🔗 Sefaria</a>` : ''}
-                        <button class="otzaria-open-btn" data-action="open-in-otzaria"
-                            data-book-title="${esc(row.bookTitle)}"
-                            data-line-index="${row.lineIndex}"
-                            data-book-id="${row.bookId}"
-                            title="פתח ישירות באוצריא">📚 פתח באוצריא</button>
-                        <button class="copy-citation-btn"
-                            data-action="copy-citation"
-                            data-ref="${esc(row.heRef)}"
-                            data-book="${esc(row.bookTitle)}"
-                            data-heref="${esc(row.heRef)}"
-                            data-content="${esc(snippet.substring(0, 200))}"
-                            title="העתק ציטוט">📋</button>
-                    </div>
-                </div>
-                <div class="otz-result-content" dir="rtl">${hlOtz(snippet, q)}</div>
-            </div>`;
-        }).join('');
-
-        hintEl && (hintEl.textContent = rows.length >= limit
-            ? `מוצגות ${limit} תוצאות ראשונות. ייתכן שיש עוד — הגדל מגבלה או צמצם את החיפוש.`
-            : '');
-
-        resultsEl.innerHTML = `<div class="otz-results-list">${html}</div>`;
-
-    } catch (err) {
-        statusEl.className = 'status-bar error';
-        statusEl.textContent = 'שגיאה: ' + (err?.toString() || err);
-    } finally {
-        otzariaSearchActive = false;
-        btn.disabled = false;
-        btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg> חפש`;
+    function openSpotlight() {
+        overlay.style.display = 'flex';
+        input.focus();
+        input.select();
     }
-}
+    function closeSpotlight() {
+        overlay.style.display = 'none';
+        activeIdx = -1;
+    }
 
-// Wire up the search page
-document.getElementById('otzariaSearchBtn')?.addEventListener('click', runOtzariaSearch);
-document.getElementById('otzariaSearchInput')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') runOtzariaSearch();
-});
+    // פתיחה: כפתור / Ctrl+K
+    trigger?.addEventListener('click', openSpotlight);
+    document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openSpotlight(); }
+        if (e.key === 'Escape' && overlay.style.display !== 'none') closeSpotlight();
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeSpotlight(); });
+
+    // ניווט ↑↓ + Enter בשדה החיפוש
+    input.addEventListener('keydown', e => {
+        const cards = resultsEl.querySelectorAll('.otz-result-card');
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            activeIdx = Math.min(activeIdx + 1, cards.length - 1);
+            updateActive(cards);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            activeIdx = Math.max(activeIdx - 1, -1);
+            updateActive(cards);
+        } else if (e.key === 'Enter') {
+            if (activeIdx >= 0 && cards[activeIdx]) {
+                // Enter על תוצאה מסומנת → פתח באוצריא
+                cards[activeIdx].querySelector('.otzaria-open-btn')?.click();
+            } else {
+                doSearch(input.value.trim());
+            }
+        }
+    });
+
+    function updateActive(cards) {
+        cards.forEach((c, i) => c.classList.toggle('otz-card-active', i === activeIdx));
+        if (activeIdx >= 0) cards[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    }
+
+    // חיפוש עם debounce (400ms אחרי עצירת הקלדה)
+    input.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        const q = input.value.trim();
+        if (!q) { resultsEl.innerHTML = ''; statusEl.style.display = 'none'; return; }
+        if (q.length < 2) return;
+        searchTimer = setTimeout(() => doSearch(q), 400);
+    });
+
+    async function doSearch(q) {
+        if (!q || isSearching) return;
+        isSearching = true;
+        activeIdx = -1;
+
+        const dbPath = document.getElementById('dbPath')?.value.trim() || settings?.defaultDb || null;
+        const limit  = 50;
+
+        statusEl.style.display = '';
+        statusEl.className = 'otz-status working';
+        statusEl.textContent = `מחפש "${q}"...`;
+        resultsEl.innerHTML = '';
+
+        try {
+            const rows = await invoke('fts_search', { query: q, dbPath: dbPath || null, limit });
+            lastResults = rows;
+
+            if (!rows.length) {
+                statusEl.className = 'otz-status';
+                statusEl.textContent = `לא נמצאו תוצאות עבור "${q}"`;
+                resultsEl.innerHTML = `<div class="otz-empty">🔎 אין תוצאות — נסה מונח אחר</div>`;
+                return;
+            }
+
+            statusEl.className = 'otz-status ok';
+            statusEl.textContent = `${rows.length} תוצאות${rows.length >= limit ? ' (הוצגו ראשונות)' : ''}`;
+
+            resultsEl.innerHTML = rows.map((row, i) => {
+                const snippet   = (row.content || '').substring(0, 300);
+                const hlSnippet = hlTerm(snippet, q);
+                const sefariaUrl = row.heRef
+                    ? `https://www.sefaria.org.il/${encodeURIComponent(row.heRef.replace(/\s/g,'_'))}`
+                    : '';
+                return `<div class="otz-result-card" data-idx="${i}" tabindex="-1">
+                    <div class="otz-result-header">
+                        <span class="otz-book-name">${esc(row.bookTitle)}</span>
+                        <span class="otz-he-ref">📌 ${esc(row.heRef)}</span>
+                        <div class="otz-result-actions">
+                            ${sefariaUrl ? `<a class="sefaria-link" href="${sefariaUrl}" target="_blank" rel="noopener">🔗 Sefaria</a>` : ''}
+                            <button class="otzaria-open-btn"
+                                data-action="open-in-otzaria"
+                                data-book-title="${esc(row.bookTitle)}"
+                                data-line-index="${row.lineIndex}"
+                                data-book-id="${row.bookId}"
+                                title="פתח ישירות באוצריא">📚 פתח</button>
+                            <button class="copy-citation-btn"
+                                data-action="copy-citation"
+                                data-ref="${esc(row.heRef)}"
+                                data-book="${esc(row.bookTitle)}"
+                                data-heref="${esc(row.heRef)}"
+                                data-content="${esc(snippet.substring(0,200))}"
+                                title="העתק ציטוט">📋</button>
+                        </div>
+                    </div>
+                    <div class="otz-result-content" dir="rtl">${hlSnippet}</div>
+                </div>`;
+            }).join('');
+
+            // סמן ראשון
+            activeIdx = 0;
+            updateActive(resultsEl.querySelectorAll('.otz-result-card'));
+
+        } catch (err) {
+            statusEl.className = 'otz-status error';
+            statusEl.textContent = 'שגיאה: ' + (err?.toString() || err);
+        } finally {
+            isSearching = false;
+        }
+    }
+
+    function hlTerm(text, term) {
+        if (!term || !text) return esc(text);
+        const escaped = esc(text);
+        const safeTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return escaped.replace(new RegExp(`(${safeTerm})`, 'gi'), '<mark class="otz-hl">$1</mark>');
+    }
+})();
 
 // ── לינק Sefaria ל"לא נמצא" ──────────────────────────
 document.addEventListener('click',e=>{
