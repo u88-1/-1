@@ -1062,42 +1062,87 @@ fn verify_biblio_sources(
 const GEMINI_KEYRING_SERVICE: &str = "bodek-mekorot";
 const GEMINI_KEYRING_ACCOUNT: &str = "gemini_api_key";
 
-/// שמירת מפתח ה-Gemini API באחסון המוצפן של מערכת ההפעלה (Windows
-/// Credential Manager / macOS Keychain / Linux Secret Service) — לא
-/// ב-localStorage או קובץ טקסט גלוי. כך המשתמש לא צריך להדביק את
-/// המפתח מחדש בכל הפעלה, וגם לא נחשף לכל מי שיפתח את קבצי האפליקציה.
+/// נתיב קובץ fallback לשמירת מפתח Gemini כשה-keyring לא זמין.
+/// נשמר ב-AppData\Roaming\com.bodek-mekorot.app\gemini_key.dat
+fn gemini_key_fallback_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("APPDATA").ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs_next::data_dir())?;
+    let dir = base.join("com.bodek-mekorot.app");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("gemini_key.dat"))
+}
+
+/// XOR פשוט עם מפתח קבוע — מונע קריאה מקרית בטקסט רגיל.
+/// לא הצפנה אמיתית, אבל מספיק להגן מ"הצצה מזדמנת" בסייר הקבצים.
+fn xor_key(data: &[u8]) -> Vec<u8> {
+    const MASK: &[u8] = b"bm-k9x2q-salt-2025";
+    data.iter().enumerate().map(|(i, b)| b ^ MASK[i % MASK.len()]).collect()
+}
+
+fn fallback_save(key: &str) -> Result<(), String> {
+    let path = gemini_key_fallback_path().ok_or("לא ניתן לקבוע נתיב fallback")?;
+    let encoded = xor_key(key.as_bytes());
+    // encode as hex string so it's a valid text file
+    let hex: String = encoded.iter().map(|b| format!("{:02x}", b)).collect();
+    std::fs::write(&path, hex).map_err(|e| format!("שגיאה בכתיבת קובץ מפתח: {}", e))
+}
+
+fn fallback_load() -> Option<String> {
+    let path = gemini_key_fallback_path()?;
+    let hex = std::fs::read_to_string(&path).ok()?;
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(&hex[i..i+2], 16).ok())
+        .collect();
+    String::from_utf8(xor_key(&bytes)).ok()
+}
+
+fn fallback_delete() {
+    if let Some(path) = gemini_key_fallback_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// שמירת מפתח Gemini — keyring ראשון, fallback לקובץ מוצפן-חלקית.
 #[tauri::command]
 fn save_gemini_key(key: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
-        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
-    entry
-        .set_password(&key)
-        .map_err(|e| format!("שגיאה בשמירת המפתח: {}", e))
+    match keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT) {
+        Ok(entry) => match entry.set_password(&key) {
+            Ok(_) => { fallback_save(&key).ok(); Ok(()) }  // שמור גם ב-fallback לסנכרון
+            Err(_) => fallback_save(&key),
+        },
+        Err(_) => fallback_save(&key),
+    }
 }
 
-/// טעינת מפתח ה-Gemini API השמור. מחזיר None אם עדיין לא נשמר מפתח
-/// (לא שגיאה — זה מצב תקין לפני שימוש ראשון).
+/// טעינת מפתח Gemini — keyring ראשון, fallback לקובץ.
 #[tauri::command]
 fn load_gemini_key() -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
-        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
-    match entry.get_password() {
-        Ok(pw) => Ok(Some(pw)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("שגיאה בטעינת המפתח: {}", e)),
+    // נסה keyring
+    if let Ok(entry) = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT) {
+        match entry.get_password() {
+            Ok(pw) if !pw.is_empty() => return Ok(Some(pw)),
+            Ok(_) => {}
+            Err(keyring::Error::NoEntry) => {}
+            Err(_) => {}
+        }
     }
+    // fallback לקובץ
+    Ok(fallback_load())
 }
 
-/// מחיקת מפתח ה-Gemini API השמור (למשל אם המשתמש רוצה להחליף מפתח
-/// או להסיר אותו לגמרי מהמחשב).
+/// מחיקת מפתח Gemini — ממחק משניהם.
 #[tauri::command]
 fn delete_gemini_key() -> Result<(), String> {
-    let entry = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT)
-        .map_err(|e| format!("שגיאה בגישה לאחסון המוצפן: {}", e))?;
-    match entry.delete_credential() {
-        Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("שגיאה במחיקת המפתח: {}", e)),
+    if let Ok(entry) = keyring::Entry::new(GEMINI_KEYRING_SERVICE, GEMINI_KEYRING_ACCOUNT) {
+        match entry.delete_credential() {
+            Ok(_) | Err(keyring::Error::NoEntry) => {}
+            Err(_) => {}
+        }
     }
+    fallback_delete();
+    Ok(())
 }
 
 /// קריאה ל-Gemini API דרך Rust במקום fetch() בצד ה-JS.
@@ -1160,7 +1205,7 @@ async fn call_gemini(
             if e.is_timeout() {
                 "פג הזמן הקצוב לתגובה מ-Gemini (90 שניות).\nייתכן שהטקסט ארוך מדי, או שהחיבור לאינטרנט איטי/לא זמין כרגע. נסה שוב, או קצר את הטקסט.".to_string()
             } else if e.is_connect() {
-                "לא ניתן להתחבר ל-Gemini — בדוק את חיבור האינטרנט שלך.".to_string()
+                format!("לא ניתן להתחבר ל-Gemini.\nפרטי שגיאה: {}\n\nבדוק: (1) חיבור אינטרנט פעיל, (2) חומת האש לא חוסמת את האפליקציה, (3) הכתובת generativelanguage.googleapis.com נגישה.", e)
             } else {
                 format!("שגיאת רשת בפנייה ל-Gemini: {}", e)
             }
