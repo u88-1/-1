@@ -261,7 +261,12 @@ function showPage(name){
     if(name==='settings')loadSettingsUI();
 }
 document.querySelectorAll('.nav-link').forEach(a=>
-    a.addEventListener('click',e=>{e.preventDefault();showPage(a.dataset.page);}));
+    a.addEventListener('click',e=>{
+        e.preventDefault();
+        // קישור החיפוש — פותח spotlight במקום לנווט לדף
+        if(a.id==='otzSpotlightTrigger') return; // הספוטלייט מטפל בעצמו
+        showPage(a.dataset.page);
+    }));
 
 // ── טיימר ─────────────────────────────────────────────
 const timerBox=document.getElementById('timerBox');
@@ -1043,6 +1048,22 @@ document.addEventListener('click',(e)=>{
         loadFromHistory(Number(el.dataset.index));
     }
 });
+
+// ── קיפול סרגל צד ────────────────────────────────────
+(function initSidebarCollapse() {
+    const sidebar = document.getElementById('sidebar');
+    const toggle  = document.getElementById('sidebarToggle');
+    if (!sidebar || !toggle) return;
+
+    const STORAGE_KEY = 'bm_sidebar_collapsed';
+    const isCollapsed = localStorage.getItem(STORAGE_KEY) === '1';
+    if (isCollapsed) sidebar.classList.add('collapsed');
+
+    toggle.addEventListener('click', () => {
+        sidebar.classList.toggle('collapsed');
+        localStorage.setItem(STORAGE_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+    });
+})();
 
 // ════════════════════════════════════════════════════════════════════════════
 //  🔍 Spotlight — חיפוש גלובלי באוצריא (Ctrl+K)

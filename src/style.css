@@ -100,7 +100,46 @@ body::before {
     top: 0;
     height: 100vh;
     box-shadow: 2px 0 20px rgba(26,18,8,0.06);
+    transition: width 0.22s cubic-bezier(0.4,0,0.2,1);
+    overflow: hidden;
 }
+
+/* ── מצב מקופל ── */
+.sidebar.collapsed { width: 52px; }
+
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .sidebar-bottom .nav-label { display: none; }
+
+.sidebar.collapsed .brand { justify-content: center; padding: 18px 0; }
+.sidebar.collapsed .nav   { padding: 10px 6px; }
+
+.sidebar.collapsed .nav-link {
+    justify-content: center;
+    padding: 10px 0;
+    border-radius: 10px;
+}
+.sidebar.collapsed .nav-link:hover::after,
+.sidebar.collapsed .nav-link.active::after {
+    content: attr(title);
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%; transform: translateY(-50%);
+    background: var(--panel-bg);
+    border: 1px solid var(--gold-border);
+    color: var(--ink);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.sidebar.collapsed .nav-link { position: relative; }
+
+.sidebar.collapsed .sidebar-bottom { padding: 10px 0; text-align: center; }
+.sidebar.collapsed .sidebar-toggle-btn svg { transform: rotate(180deg); }
 
 .brand {
     display: flex;
@@ -110,7 +149,7 @@ body::before {
     border-bottom: 1px solid var(--border);
 }
 
-.brand-mark { font-size: 22px; }
+.brand-mark { font-size: 22px; flex-shrink: 0; }
 
 .brand-name {
     font-family: 'Frank Ruhl Libre', serif;
@@ -118,6 +157,9 @@ body::before {
     font-weight: 900;
     letter-spacing: -0.3px;
     color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    transition: opacity 0.15s ease, width 0.22s ease;
 }
 
 .brand-name span { color: var(--gold); }
@@ -128,6 +170,7 @@ body::before {
     display: flex;
     flex-direction: column;
     gap: 3px;
+    overflow: hidden;
 }
 
 .nav-link {
@@ -141,6 +184,12 @@ body::before {
     font-size: 13.5px;
     font-weight: 400;
     transition: all var(--ease);
+    white-space: nowrap;
+}
+
+.nav-label {
+    overflow: hidden;
+    transition: opacity 0.15s ease;
 }
 
 .nav-link:hover {
@@ -165,7 +214,29 @@ body::before {
     color: var(--text-3);
     border-top: 1px solid var(--border);
     letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
 }
+
+/* כפתור קיפול */
+.sidebar-toggle-btn {
+    position: absolute;
+    bottom: 52px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-2, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+    color: var(--text-3);
+    transition: all 0.18s ease;
+    opacity: 0;
+}
+.sidebar:hover .sidebar-toggle-btn { opacity: 1; }
+.sidebar-toggle-btn:hover { color: var(--gold-light); border-color: var(--gold-border); background: var(--gold-dim); }
+.sidebar-toggle-btn svg { width: 12px; height: 12px; transition: transform 0.22s ease; }
 
 /* ── Main ───────────────────────────────────────────── */
 .main {
@@ -1916,24 +1987,7 @@ mark.focus-mark {
    🔍 Spotlight — חיפוש גלובלי באוצריא (Ctrl+K)
    ════════════════════════════════════════════════════════════ */
 
-/* כפתור פתיחה בתוך ה-brand */
-.otz-trigger-btn {
-    margin-right: auto;
-    width: 30px; height: 30px;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 8px; cursor: pointer;
-    color: var(--text-2); transition: all 0.18s ease;
-    flex-shrink: 0;
-}
-.otz-trigger-btn svg { width: 14px; height: 14px; }
-.otz-trigger-btn:hover {
-    background: var(--gold-dim);
-    border-color: var(--gold-border);
-    color: var(--gold-light);
-    transform: scale(1.08);
-}
+/* otz-trigger-btn הוסר — הכפתור עבר להיות nav-link רגיל */
 
 /* Overlay רקע */
 .otz-overlay {
