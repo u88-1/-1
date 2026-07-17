@@ -2857,7 +2857,95 @@ fn open_in_otzaria(
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  11. כניסת התוכנית — Tray + הסתרת חלון בסגירה
+//  11. חיפוש טקסט חופשי ב-DB (חלון חיפוש מוטמע)
+// ════════════════════════════════════════════════════════════════════════════
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FtsResult {
+    line_id: i64,
+    book_title: String,
+    he_ref: String,
+    content: String,
+    line_index: i64,
+    book_id: i64,
+}
+
+/// חיפוש טקסט חופשי ב-DB — משתמש ב-FTS5 (line_fts) אם קיים,
+/// אחרת SQL LIKE. מחזיר עד limit תוצאות.
+#[tauri::command]
+fn fts_search(
+    db: State<'_, DbState>,
+    query: String,
+    db_path: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<FtsResult>, String> {
+    let resolved_db = db_path
+        .as_deref()
+        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+
+    let mut guard = db.0.lock().unwrap();
+    ensure_db(&mut guard, &resolved_db)?;
+    let opendb = guard.as_ref().unwrap();
+    let s = &opendb.schema;
+    let max = limit.unwrap_or(50).min(200);
+
+    let mut out = Vec::new();
+
+    if opendb.fts {
+        // FTS5 — חיפוש מהיר עם דירוג רלוונטיות
+        let sql = format!(
+            "SELECT l.id, b.title, l.{hr}, l.content, l.{li}, l.{bid} \
+             FROM line_fts f \
+             JOIN line l ON l.id = f.rowid \
+             JOIN book b ON b.id = l.{bid} \
+             WHERE line_fts MATCH ? \
+             ORDER BY rank LIMIT ?",
+            hr = s.he_ref, li = s.line_index, bid = s.book_id,
+        );
+        let fts_query = format!("\"{}\"", query.replace('"', ""));
+        let mut stmt = opendb.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![fts_query, max], |r| {
+            Ok(FtsResult {
+                line_id:    r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                book_title: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                he_ref:     r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                content:    strip_tags(&r.get::<_, Option<String>>(3)?.unwrap_or_default()),
+                line_index: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                book_id:    r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+            })
+        }).map_err(|e| e.to_string())?;
+        for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    } else {
+        // fallback: LIKE (איטי אבל עובד תמיד)
+        let like_q = format!("%{}%", query);
+        let sql = format!(
+            "SELECT l.id, b.title, l.{hr}, l.content, l.{li}, l.{bid} \
+             FROM line l JOIN book b ON b.id = l.{bid} \
+             WHERE l.content LIKE ? \
+             LIMIT ?",
+            hr = s.he_ref, li = s.line_index, bid = s.book_id,
+        );
+        let mut stmt = opendb.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![like_q, max], |r| {
+            Ok(FtsResult {
+                line_id:    r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                book_title: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                he_ref:     r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                content:    strip_tags(&r.get::<_, Option<String>>(3)?.unwrap_or_default()),
+                line_index: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                book_id:    r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+            })
+        }).map_err(|e| e.to_string())?;
+        for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    }
+    Ok(out)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  12. כניסת התוכנית — Tray + הסתרת חלון בסגירה
 // ════════════════════════════════════════════════════════════════════════════
 
 fn main() {
@@ -2879,7 +2967,8 @@ fn main() {
             call_gemini,
             save_gemini_key,
             load_gemini_key,
-            delete_gemini_key
+            delete_gemini_key,
+            fts_search
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
