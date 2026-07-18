@@ -1145,16 +1145,7 @@ fn delete_gemini_key() -> Result<(), String> {
     Ok(())
 }
 
-/// קריאה ל-Gemini API דרך Rust במקום fetch() בצד ה-JS.
-/// למה: Google לא בהכרח שולחת כותרות CORS שמתירות מקורות מסוג
-/// tauri://‎ (בניגוד לדפדפן רגיל עם מקור http/https) - גם אם ה-CSP
-/// של ה-webview מתיר את הבקשה לצאת, ה-webview עשוי לחסום את קריאת
-/// התגובה בגלל CORS, מה שמופיע כ-"Failed to fetch" סתמי בלי שום
-/// מידע שימושי. קריאת HTTP מתוך Rust אינה כפופה כלל למדיניות CORS
-/// (זו מדיניות אכיפה של דפדפנים/webviews בלבד, לא של לקוחות HTTP
-/// שרתיים) - כך שהבעיה נעלמת לחלוטין.
-/// שאר ההיגיון (זיהוי חסימה/quota/מפתח לא תקין) הועבר לכאן במדויק
-/// מהקוד שהיה ב-JS, בלי שינוי בתוכן ההודעות.
+/// קריאה ל-Gemini API דרך Rust
 #[tauri::command]
 async fn call_gemini(
     prompt: String,
@@ -1166,35 +1157,28 @@ async fn call_gemini(
     if api_key.trim().is_empty() {
         return Err("מפתח API ריק".to_string());
     }
+
+    // Gemini 2.5+ דורש /v1/ ולא /v1beta/
+    let api_version = if model.starts_with("gemini-2.5") { "v1" } else { "v1beta" };
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        model, api_key
+        "https://generativelanguage.googleapis.com/{}/models/{}:generateContent?key={}",
+        api_version, model, api_key
     );
-    // קריטי: בלי timeout מפורש, בקשה שנתקעת ברשת (לא שגיאה - סתם
-    // תגובה שלא מגיעה) הייתה יכולה להיתלות לנצח, כשהמשתמש רואה רק
-    // "מתחבר..." שלעולם לא מסתיים ובלי שום הודעת שגיאה. 90 שניות
-    // נותנות מרווח סביר לטקסטים ארוכים/maxOutputTokens גבוה (כמו
-    // במסכם הטקסט), אך עדיין מבטיחות שהמשתמש יקבל תשובה כלשהי.
+
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(90))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("שגיאה באתחול לקוח הרשת: {}", e))?;
+
     let mut body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }]
     });
-    // generationConfig אופציונלי — נדרש לכלי הסיכום (temperature נמוך ליציבות,
-    // maxOutputTokens גבוה לסיכומים ארוכים). כשלא מסופק, Gemini משתמש בברירת
-    // המחדל שלו (זהה להתנהגות הקודמת של עורך ה-AI, שלא שולח generationConfig כלל).
-    if temperature.is_some() || max_output_tokens.is_some() {
-        let mut cfg = serde_json::Map::new();
-        if let Some(t) = temperature {
-            cfg.insert("temperature".to_string(), serde_json::json!(t));
-        }
-        if let Some(m) = max_output_tokens {
-            cfg.insert("maxOutputTokens".to_string(), serde_json::json!(m));
-        }
-        body["generationConfig"] = serde_json::Value::Object(cfg);
-    }
+
+    let mut cfg = serde_json::Map::new();
+    if let Some(t) = temperature { cfg.insert("temperature".to_string(), serde_json::json!(t)); }
+    if let Some(m) = max_output_tokens { cfg.insert("maxOutputTokens".to_string(), serde_json::json!(m)); }
+    if !cfg.is_empty() { body["generationConfig"] = serde_json::Value::Object(cfg); }
+
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -1203,60 +1187,77 @@ async fn call_gemini(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                "פג הזמן הקצוב לתגובה מ-Gemini (90 שניות).\nייתכן שהטקסט ארוך מדי, או שהחיבור לאינטרנט איטי/לא זמין כרגע. נסה שוב, או קצר את הטקסט.".to_string()
+                "פג הזמן הקצוב לתגובה מ-Gemini (120 שניות).\nנסה לקצר את הטקסט.".to_string()
             } else if e.is_connect() {
-                format!("לא ניתן להתחבר ל-Gemini.\nפרטי שגיאה: {}\n\nבדוק: (1) חיבור אינטרנט פעיל, (2) חומת האש לא חוסמת את האפליקציה, (3) הכתובת generativelanguage.googleapis.com נגישה.", e)
+                format!("לא ניתן להתחבר ל-Gemini.\nפרטי שגיאה: {}\n\nבדוק: (1) חיבור אינטרנט, (2) חומת האש לא חוסמת.", e)
             } else {
-                format!("שגיאת רשת בפנייה ל-Gemini: {}", e)
+                format!("שגיאת רשת: {}", e)
             }
         })?;
 
-    let data: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("שגיאה בפענוח תגובת Gemini: {}", e))?;
+    let status = response.status();
+    let body_text = response.text().await.map_err(|e| format!("שגיאה בקריאת תגובה: {}", e))?;
 
+    // נסה לפענח JSON
+    let data: serde_json::Value = serde_json::from_str(&body_text)
+        .map_err(|_| format!("תגובה לא תקינה מ-Gemini (HTTP {}): {}", status, &body_text[..body_text.len().min(300)]))?;
+
+    // שגיאת API מפורשת
     if let Some(err) = data.get("error") {
         let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("שגיאה לא ידועה");
-        if msg.contains("quota") {
-            return Err("שגיאת מכסה: המודל שבחרת חסום כרגע בחשבון שלך.\nפתרון: החלף את הבחירה ב'בחר מודל' ל-'Gemini 1.5 Flash (הכי יציב)' ונסה שוב.".to_string());
-        }
         let code = err.get("code").and_then(|c| c.as_i64());
-        if msg.contains("API key") || code == Some(400) || code == Some(403) {
-            return Err("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio, ושהוא לא פג תוקף.".to_string());
+        if msg.contains("quota") || code == Some(429) {
+            return Err(format!("שגיאת מכסה (Quota): המודל {} חסום כרגע.\nנסה מודל אחר או המתן מספר דקות.", model));
         }
-        return Err(msg.to_string());
+        if msg.contains("API key") || code == Some(400) || code == Some(403) {
+            return Err("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio.".to_string());
+        }
+        if msg.contains("not found") || code == Some(404) {
+            return Err(format!("המודל \"{}\" לא נמצא.\nייתכן שהוא לא זמין בחשבונך — נסה Gemini 2.0 Flash.", model));
+        }
+        return Err(format!("שגיאת Gemini: {}", msg));
     }
 
+    // בדוק חסימת בטיחות
     if let Some(block_reason) = data
         .get("promptFeedback")
         .and_then(|p| p.get("blockReason"))
         .and_then(|b| b.as_str())
     {
-        return Err(format!(
-            "הבקשה נחסמה ע\"י Google (סיבה: {}).\nנסה לקצר את הטקסט או לפצל אותו לקטעים קטנים יותר.",
-            block_reason
-        ));
+        return Err(format!("הבקשה נחסמה ע\"י Google (סיבה: {}).\nנסה לקצר את הטקסט.", block_reason));
     }
 
+    // חלץ טקסט — תואם Gemini 1.5, 2.0, 2.5
     let candidate = data.get("candidates").and_then(|c| c.get(0));
+
+    // בדוק finishReason — STOP = תקין, SAFETY/OTHER = שגיאה
+    if let Some(finish) = candidate.and_then(|c| c.get("finishReason")).and_then(|r| r.as_str()) {
+        if finish == "SAFETY" {
+            return Err("התגובה נחסמה ע\"י מסנני בטיחות. נסה לנסח את הבקשה אחרת.".to_string());
+        }
+        if finish == "MAX_TOKENS" {
+            // זה בסדר — נחזיר מה שיש
+        }
+    }
+
     let text = candidate
         .and_then(|c| c.get("content"))
         .and_then(|c| c.get("parts"))
-        .and_then(|p| p.get(0))
+        .and_then(|p| p.as_array())
+        .and_then(|arr| arr.first())
         .and_then(|p| p.get("text"))
         .and_then(|t| t.as_str());
 
     match text {
-        Some(t) => Ok(t.to_string()),
-        None => {
+        Some(t) if !t.is_empty() => Ok(t.to_string()),
+        _ => {
             let reason = candidate
                 .and_then(|c| c.get("finishReason"))
                 .and_then(|r| r.as_str())
                 .unwrap_or("לא ידועה");
             Err(format!(
-                "Google לא החזירה תוצאה (סיבה: {}).\nייתכן שהתוכן נחסם ע\"י מסנני בטיחות, או שהטקסט ארוך מדי. נסה טקסט קצר יותר.",
-                reason
+                "Gemini לא החזיר תוצאה (סיבה: {}).\nייתכן שהטקסט ארוך מדי. נסה טקסט קצר יותר.\n\nתגובה מלאה:\n{}",
+                reason, &body_text[..body_text.len().min(500)]
             ))
         }
     }
@@ -2855,6 +2856,31 @@ fn check_ref_index(db_path: String) -> bool {
 /// book_title — שם הספר בדיוק כפי שמופיע בטור `title` של טבלת `book` ב-DB
 /// line_index — מספר השורה שאוצריא תגלול אליה
 #[tauri::command]
+/// פתיחת URL חיצוני בדפדפן ברירת המחדל — target="_blank" לא עובד ב-Tauri webview
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| format!("שגיאה בפתיחת קישור: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(&url)
+            .spawn().map_err(|e| format!("שגיאה: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(&url)
+            .spawn().map_err(|e| format!("שגיאה: {e}"))?;
+    }
+    Ok(())
+}
+
 fn open_in_otzaria(
     book_title: String,
     line_index: i64,
@@ -3013,7 +3039,8 @@ fn main() {
             save_gemini_key,
             load_gemini_key,
             delete_gemini_key,
-            fts_search
+            fts_search,
+            open_url
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};

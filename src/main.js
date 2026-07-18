@@ -1179,13 +1179,17 @@ document.addEventListener('click',(e)=>{
         if (activeIdx >= 0) cards[activeIdx]?.scrollIntoView({ block: 'nearest' });
     }
 
-    // חיפוש עם debounce (400ms אחרי עצירת הקלדה)
+    // חיפוש עם debounce (250ms — מהיר יותר)
     input.addEventListener('input', () => {
         clearTimeout(searchTimer);
         const q = input.value.trim();
         if (!q) { resultsEl.innerHTML = ''; statusEl.style.display = 'none'; return; }
         if (q.length < 2) return;
-        searchTimer = setTimeout(() => doSearch(q), 400);
+        // הצג spinner מיידי
+        statusEl.style.display = '';
+        statusEl.className = 'otz-status working';
+        statusEl.textContent = `מחפש "${q}"...`;
+        searchTimer = setTimeout(() => doSearch(q), 250);
     });
 
     async function doSearch(q) {
@@ -1266,14 +1270,26 @@ document.addEventListener('click',(e)=>{
     }
 })();
 
+// ── פתיחת קישורים חיצוניים דרך Rust (target="_blank" לא עובד ב-Tauri) ──
+document.addEventListener('click', e => {
+    const a = e.target.closest('a[href^="http"]');
+    if (!a) return;
+    e.preventDefault();
+    const url = a.href;
+    invoke('open_url', { url }).catch(() => {
+        // fallback: window.open אם open_url נכשל
+        window.open(url, '_blank', 'noopener');
+    });
+});
+
 // ── לינק Sefaria ל"לא נמצא" ──────────────────────────
 document.addEventListener('click',e=>{
     const a=e.target.closest('.missing-sefaria-link');
     if(!a)return;
     e.preventDefault();
     const ref=a.dataset.ref||'';
-    const sefariaSearch='https://www.sefaria.org/search?q='+encodeURIComponent(ref)+'&lang=he';
-    window.open(sefariaSearch,'_blank','noopener');
+    const url='https://www.sefaria.org.il/search?q='+encodeURIComponent(ref)+'&lang=he';
+    invoke('open_url',{url}).catch(()=>window.open(url,'_blank','noopener'));
 });
 
 loadSettingsUI();
