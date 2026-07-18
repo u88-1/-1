@@ -2842,15 +2842,11 @@ fn check_ref_index(db_path: String) -> bool {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  10. פתיחת תוצאה ישירות באוצריא
+//  10. פתיחת קישורים חיצוניים ואוצריא
 // ════════════════════════════════════════════════════════════════════════════
 
-/// פותח את אוצריא ישירות על ספר ושורה מסוימת.
-///
-/// הלוגיקה:
-///   1. מוצא את קובץ tabs.json של אוצריא (ב-AppData\Roaming\com.otzaria.otzaria)
-///   2. כותב tab חדש עם הספר והאינדקס המבוקש
-/// פתיחת URL חיצוני בדפדפן ברירת המחדל — target="_blank" לא עובד ב-Tauri webview
+/// פתיחת URL חיצוני בדפדפן ברירת המחדל.
+/// target="_blank" לא עובד ב-Tauri webview — לכן הכל עובר דרך Rust.
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -2875,6 +2871,11 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// פותח את אוצריא ישירות על ספר ושורה מסוימת.
+///
+/// הלוגיקה:
+///   1. מוצא את קובץ tabs.json של אוצריא (ב-AppData\Roaming\com.otzaria.otzaria)
+///   2. כותב tab חדש עם הספר והאינדקס המבוקש
 #[tauri::command]
 fn open_in_otzaria(
     book_title: String,
