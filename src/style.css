@@ -2131,3 +2131,22 @@ mark.otz-hl {
 /* progressBar מחלק smooth */
 #progressBar { transition: opacity 0.5s ease; }
 #progressFill { transition: width 0.3s ease; }
+
+/* ════════════════════════════════════════════════════════════
+   🕐 היסטוריה — ring + כפתור מחיקה + שיפורי layout
+   ════════════════════════════════════════════════════════════ */
+
+.history-card {
+    display: flex; align-items: center; gap: 14px;
+}
+
+.history-del-btn {
+    background: transparent; border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 6px; color: rgba(239,68,68,0.6); cursor: pointer;
+    font-size: 0.78rem; padding: 3px 7px;
+    transition: all 0.15s ease;
+}
+.history-del-btn:hover {
+    background: rgba(239,68,68,0.1);
+    border-color: #ef4444; color: #ef4444;
+}

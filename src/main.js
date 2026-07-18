@@ -911,34 +911,57 @@ function exportData(format){
 function renderHistory(){
     const hist=loadHistory();
     const container=document.getElementById('historyList');if(!container)return;
-    if(!hist.length){container.innerHTML=`<div class="history-empty"><div class="empty-icon">🕐</div><div>אין הרצות קודמות.</div></div>`;return;}
+    if(!hist.length){
+        container.innerHTML=`<div class="history-empty"><div class="empty-icon">🕐</div><div>אין הרצות קודמות.</div></div>`;
+        return;
+    }
     container.innerHTML=`<div class="history-list">${hist.map((h,i)=>{
         const date=new Date(h.ts);
         const ds=date.toLocaleDateString('he-IL')+' '+date.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
         const pct=h.totalRefs>0?Math.round(h.foundCount/h.totalRefs*100):0;
-        return`<div class="history-card">
-            <div>
-                <div class="history-file">📄 ${esc(h.filePath)}</div>
+        const ringColor=pct>=80?'#22c55e':pct>=50?'#eab308':'#ef4444';
+        const r=14,circ=Math.PI*2*r;
+        const dash=Math.round(circ*pct/100);
+        const ring=`<svg width="38" height="38" viewBox="0 0 38 38" style="flex-shrink:0">
+            <circle cx="19" cy="19" r="${r}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="4"/>
+            <circle cx="19" cy="19" r="${r}" fill="none" stroke="${ringColor}" stroke-width="4"
+                stroke-dasharray="${dash} ${circ}" stroke-dashoffset="${circ/4}"
+                stroke-linecap="round" transform="rotate(-90 19 19)"/>
+            <text x="19" y="23" text-anchor="middle" font-size="9" font-weight="700" fill="${ringColor}">${pct}%</text>
+        </svg>`;
+        const fname=h.filePath?h.filePath.split(/[\\/]/).pop():'הדבקת טקסט';
+        return`<div class="history-card" id="hcard-${i}">
+            ${ring}
+            <div style="flex:1;min-width:0">
+                <div class="history-file" title="${esc(h.filePath||'')}">📄 ${esc(fname)}</div>
                 <div class="history-stats">
-                    <span class="h-stat found">נמצאו: ${h.foundCount}</span>
-                    <span class="h-stat missing">לא נמצאו: ${h.notFoundCount}</span>
-                    <span class="h-stat found">${pct}% כיסוי</span>
+                    <span class="h-stat found">✓ ${h.foundCount} נמצאו</span>
+                    <span class="h-stat missing">✗ ${h.notFoundCount} חסרים</span>
+                    <span class="h-stat">${h.totalRefs} סה"כ</span>
                 </div>
+                <div class="history-time">${esc(ds)} ${h.elapsed?'· '+esc(h.elapsed):''}</div>
             </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
-                <div class="history-time">${esc(ds)}</div>
-                <div class="history-time">${esc(h.elapsed||'')}</div>
-                <button class="history-load-btn" data-action="load-history" data-index="${i}">טען שוב</button>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+                <button class="history-load-btn" data-action="load-history" data-index="${i}">▶ טען שוב</button>
+                <button class="history-del-btn" data-action="delete-history" data-index="${i}" title="מחק ערך זה">🗑</button>
             </div>
         </div>`;
     }).join('')}</div>`;
 }
+
 function loadFromHistory(idx){
     const h=loadHistory()[idx];if(!h)return;
     const ie=document.getElementById('inputFile');const de=document.getElementById('dbPath');
-    if(ie){ie.value=h.filePath;localStorage.setItem('bm_inputFile',h.filePath);}
+    if(ie){ie.value=h.filePath||'';localStorage.setItem('bm_inputFile',h.filePath||'');}
     if(de&&h.dbPath){de.value=h.dbPath;localStorage.setItem('bm_dbPath',h.dbPath);}
     showPage('compare');
+}
+
+function deleteHistoryItem(idx){
+    const hist=loadHistory();
+    hist.splice(idx,1);
+    try{localStorage.setItem('bm_history',JSON.stringify(hist));}catch{}
+    renderHistory();
 }
 document.getElementById('clearHistoryBtn')?.addEventListener('click',()=>{
     if(confirm('למחוק את כל ההיסטוריה?')){localStorage.removeItem('bm_history');renderHistory();}
@@ -1075,6 +1098,8 @@ document.addEventListener('click',(e)=>{
 
     }else if(action==='load-history'){
         loadFromHistory(Number(el.dataset.index));
+    }else if(action==='delete-history'){
+        if(confirm('למחוק ערך זה מההיסטוריה?'))deleteHistoryItem(Number(el.dataset.index));
     }
 });
 
@@ -1707,14 +1732,15 @@ async function wireGeminiKeyInput(inputEl){
     } catch (e) {
         console.warn('לא ניתן היה לטעון מפתח Gemini שמור:', e);
     }
-    // קריטי: 'input' (לא 'change') כדי לשמור מיד עם כל הקלדה/הדבקה,
-    // בלי להסתמך על blur — 'change' לא תמיד מספיק להיווצר לפני
-    // שהמשתמש כבר לוחץ על כפתור ההרצה (למשל בהדבקה מהירה + Enter/קליק).
     let saveDebounce = null;
     inputEl.addEventListener('input', () => {
         clearTimeout(saveDebounce);
         saveDebounce = setTimeout(async () => {
             const val = inputEl.value.trim();
+            // סנכרן לכל שדות המפתח האחרים
+            document.querySelectorAll('.gemini-key-input').forEach(el => {
+                if (el !== inputEl) el.value = val;
+            });
             try {
                 if (val) {
                     await invoke('save_gemini_key', { key: val });
