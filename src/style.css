@@ -2104,3 +2104,30 @@ mark.otz-hl {
     background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-2); margin-left: 3px;
 }
+
+/* ════════════════════════════════════════════════════════════
+   📊 שיפורי סיכום — ring, ביטחון ממוצע, כפתורי ייצוא מהירים
+   ════════════════════════════════════════════════════════════ */
+
+.summary-ring-card {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.summary-ring-card svg { display: block; }
+
+.summary-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--border);
+    margin-top: 10px;
+}
+.summary-quick-btn {
+    font-size: 0.75rem; padding: 4px 12px; border-radius: 6px;
+    background: var(--gold-dim); border: 1px solid var(--gold-border);
+    color: var(--gold-light); cursor: pointer; font-weight: 600;
+    transition: background 0.15s ease;
+}
+.summary-quick-btn:hover { background: rgba(212,175,55,0.22); }
+
+/* progressBar מחלק smooth */
+#progressBar { transition: opacity 0.5s ease; }
+#progressFill { transition: width 0.3s ease; }

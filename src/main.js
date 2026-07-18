@@ -252,11 +252,12 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 
 // ── הצגת דפים ─────────────────────────────────────────
 function showPage(name){
+    if(!name)return;
     ['compare','history','biblio','aieditor','summarizer','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
         if(el)el.style.display=p===name?'':'none';
     });
-    document.querySelectorAll('.nav-link').forEach(a=>a.classList.toggle('active',a.dataset.page===name));
+    document.querySelectorAll('.nav-link[data-page]').forEach(a=>a.classList.toggle('active',a.dataset.page===name));
     if(name==='history')renderHistory();
     if(name==='settings')loadSettingsUI();
 }
@@ -419,7 +420,8 @@ function updateProgressBar(done,total){
         bar.innerHTML='<div id="progressFill" style="width:0%"></div>';
         statusEl.after(bar);
     }
-    document.getElementById('progressFill').style.width=(total>0?Math.round(done/total*100):0)+'%';
+    const pct=total>0?Math.round(done/total*100):0;
+    document.getElementById('progressFill').style.width=pct+'%';
 }
 
 function upsertCard(idx,item){
@@ -433,7 +435,9 @@ function upsertCard(idx,item){
         const div=document.createElement('div');div.innerHTML=html;
         const el=div.firstElementChild;
         list.appendChild(el);
-        el?.scrollIntoView({behavior:'smooth',block:'nearest'});
+        // גלילה רק אם המשתמש כבר ליד תחתית הרשימה (לא מגלגלים בכוח)
+        const distFromBottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
+        if(distFromBottom<300)el?.scrollIntoView({behavior:'smooth',block:'nearest'});
     }
 }
 
@@ -442,7 +446,10 @@ function onStreamComplete(summary){
     const elapsed=stopTimer();
     isRunning=false;activeJobId=null;
     resetRunButton();
-    document.getElementById('progressBar')?.remove();
+    // סרגל ל-100% ואז נעלם בהדרגה
+    const fill=document.getElementById('progressFill');
+    if(fill){fill.style.width='100%';}
+    setTimeout(()=>document.getElementById('progressBar')?.remove(),800);
     if(summary.error){setStatus('שגיאה: '+summary.error,'error');return;}
     const dense=sortedCache.filter(x=>x);
     lastResults=summary;
@@ -451,7 +458,7 @@ function onStreamComplete(summary){
     renderSummary({...summary,results:dense});
     renderToolbar({...summary,results:dense});
     const rank=x=>(x.rows?.length)?(x.matchType==='exact'?2:1):0;
-    sortedCache=[...dense].sort((a,b)=>rank(a)-rank(b));
+    sortedCache=[...dense].sort((a,b)=>rank(b)-rank(a));
     renderResults();
     if(!aborted)addHistory({filePath:inputFileEl.value.trim(),dbPath:currentDbPath,
         totalRefs:summary.totalRefs,foundCount:summary.foundCount,
@@ -607,14 +614,36 @@ function renderSummary(r){
     const sefariaCount=r.sefariaFoundCount||0;
     const partialCount=Math.max(0,r.foundCount-sefariaCount-exactCount);
     const pct=r.totalRefs>0?Math.round(r.foundCount/r.totalRefs*100):0;
+    const avgConf=r.results?.length
+        ? Math.round(r.results.reduce((s,x)=>s+calcConfidence(x),0)/r.results.length)
+        : 0;
+
+    // SVG ring
+    const radius=28,circ=Math.PI*2*radius;
+    const dash=Math.round(circ*pct/100);
+    const ringColor=pct>=80?'#22c55e':pct>=50?'#eab308':'#ef4444';
+    const ring=`<svg width="72" height="72" viewBox="0 0 72 72">
+        <circle cx="36" cy="36" r="${radius}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="7"/>
+        <circle cx="36" cy="36" r="${radius}" fill="none" stroke="${ringColor}" stroke-width="7"
+            stroke-dasharray="${dash} ${circ}" stroke-dashoffset="${circ/4}"
+            stroke-linecap="round" transform="rotate(-90 36 36)"/>
+        <text x="36" y="41" text-anchor="middle" font-size="14" font-weight="700" fill="${ringColor}">${pct}%</text>
+    </svg>`;
+
     summaryEl.style.display='block';
     summaryEl.innerHTML=`<div class="summary-grid">
+        <div class="stat-card summary-ring-card">${ring}<div class="stat-label">כיסוי</div></div>
         <div class="stat-card"><div class="stat-num">${r.totalRefs}</div><div class="stat-label">הפניות</div></div>
         <div class="stat-card s-found"><div class="stat-num">${exactCount}</div><div class="stat-label">מדויק ✓</div></div>
-        <div class="stat-card s-partial"><div class="stat-num">${partialCount}</div><div class="stat-label">חלקי</div></div>
+        <div class="stat-card s-partial"><div class="stat-num">${partialCount}</div><div class="stat-label">חלקי ~</div></div>
         ${sefariaCount>0?`<div class="stat-card s-sefaria"><div class="stat-num">${sefariaCount}</div><div class="stat-label">Sefaria 🌐</div></div>`:''}
         <div class="stat-card s-missing"><div class="stat-num">${r.notFoundCount}</div><div class="stat-label">לא נמצאו ✗</div></div>
-        <div class="stat-card"><div class="stat-num">${pct}%</div><div class="stat-label">כיסוי</div></div>
+        <div class="stat-card" title="ציון ביטחון ממוצע לתוצאות שנמצאו"><div class="stat-num">${avgConf}%</div><div class="stat-label">ביטחון ממוצע</div></div>
+    </div>
+    <div class="summary-actions">
+        <button class="summary-quick-btn" data-action="export" data-format="csv" title="ייצוא מהיר">⬇ CSV</button>
+        <button class="summary-quick-btn" data-action="export" data-format="json" title="ייצוא JSON">⬇ JSON</button>
+        <button class="summary-quick-btn" data-action="export" data-format="txt" title="ייצוא טקסט">⬇ טקסט</button>
     </div>`;
 }
 
