@@ -2850,12 +2850,6 @@ fn check_ref_index(db_path: String) -> bool {
 /// הלוגיקה:
 ///   1. מוצא את קובץ tabs.json של אוצריא (ב-AppData\Roaming\com.otzaria.otzaria)
 ///   2. כותב tab חדש עם הספר והאינדקס המבוקש
-///   3. מפעיל את אוצריא (אם לא פועלת כבר) — Windows מביא את החלון קדמה אוטומטית
-///      כי אוצריא בנויה כ-single-instance
-///
-/// book_title — שם הספר בדיוק כפי שמופיע בטור `title` של טבלת `book` ב-DB
-/// line_index — מספר השורה שאוצריא תגלול אליה
-#[tauri::command]
 /// פתיחת URL חיצוני בדפדפן ברירת המחדל — target="_blank" לא עובד ב-Tauri webview
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -2881,6 +2875,7 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
 fn open_in_otzaria(
     book_title: String,
     line_index: i64,
