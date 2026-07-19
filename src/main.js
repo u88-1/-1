@@ -119,15 +119,20 @@ function smartSearchScore(item, query) {
 
 /**
  * חישוב ציון ביטחון (confidence) לתוצאה — 0–100
+ * ⚡ perf: תוצאה נשמרת ב-WeakMap כדי למנוע חישוב כפול בכל renderResults
  */
+const _confidenceCache = new WeakMap();
 function calcConfidence(item) {
-    if (!item.rows?.length) return 0;
+    if (_confidenceCache.has(item)) return _confidenceCache.get(item);
+    if (!item.rows?.length) { _confidenceCache.set(item, 0); return 0; }
     const mt = item.matchType;
     const baseScore = { exact: 95, prefix: 72, fuzzy: 45, sefaria: 60, none: 0 }[mt] ?? 0;
-    if (baseScore === 0) return 0;
+    if (baseScore === 0) { _confidenceCache.set(item, 0); return 0; }
     // בונוס אם יש יותר מתוצאה אחת (מעיד על מקור מוכר היטב)
     const multiBonus = Math.min(item.rows.length - 1, 3) * 1.5;
-    return Math.min(100, Math.round(baseScore + multiBonus));
+    const result = Math.min(100, Math.round(baseScore + multiBonus));
+    _confidenceCache.set(item, result);
+    return result;
 }
 
 /**
@@ -552,11 +557,9 @@ function buildCompareCard(item,idx){
             contentHtml=highlightContent(contentHtml,contentSearchQuery);
         }
         // הדגש גם את מילות החיפוש של הפילטר בתוכן
-        if(filterQuery.length>=2){
-            const fqForms=expandSearchQuery(filterQuery);
-            for(const form of fqForms){
-                if(form.length>=2)contentHtml=highlightContent(contentHtml,form);
-            }
+        // ⚡ perf: משתמש ב-_renderFqForms שחושב פעם אחת ב-renderResults
+        for(const form of (window._renderFqForms||[])){
+            if(form.length>=2)contentHtml=highlightContent(contentHtml,form);
         }
 
         // תוצאות נוספות (ri>0) — מגיעות סגורות
@@ -719,31 +722,39 @@ function getFilteredResults(){
     if(!sortedCache)return[];
     const q=filterQuery.toLowerCase();
     const cq=contentSearchQuery.toLowerCase();
+    // ⚡ perf: חשב את הצורות פעם אחת מחוץ ללולאה
+    const qForms  = q  ? expandSearchQuery(q)  : null;
+    const cqForms = cq ? expandSearchQuery(cq) : null;
     return sortedCache.filter(item=>{
         const found=item.rows?.length>0;
         if(filterStatus==='found'&&!found)return false;
         if(filterStatus==='missing'&&found)return false;
         // חיפוש חכם — כולל קיצורים ווריאציות כתיב
-        let passName=true;
-        if(q){
-            passName = smartSearchScore(item, q) > 0;
+        if(qForms){
+            const textFields=[
+                item.ref||'',
+                item.sentence||'',
+                ...(item.rows||[]).map(r=>(r.bookTitle||'')+' '+(r.heRef||'')+' '+(r.content||'')),
+            ].join(' ').toLowerCase();
+            if(!qForms.some(form=>textFields.includes(form)))return false;
         }
-        // סינון לפי תוכן (content search) — גם עם חיפוש חכם
-        let passContent=true;
-        if(cq){
-            const cqForms = expandSearchQuery(cq);
-            passContent = cqForms.some(form =>
-                item.rows?.some(r=>(r.content||'').toLowerCase().includes(form)) ||
-                item.sentence?.toLowerCase().includes(form) ||
+        // סינון לפי תוכן (content search)
+        if(cqForms){
+            const passContent=cqForms.some(form=>
+                item.rows?.some(r=>(r.content||'').toLowerCase().includes(form))||
+                item.sentence?.toLowerCase().includes(form)||
                 item.ref.toLowerCase().includes(form)
             );
+            if(!passContent)return false;
         }
-        return passName&&passContent;
+        return true;
     });
 }
 
 function renderResults(){
     if(!sortedCache?.length){resultArea.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><div>לא נמצאו הפניות.</div></div>`;return;}
+    // ⚡ perf: חשב פעם אחת לכל הכרטיסים במקום בתוך buildCompareCard
+    window._renderFqForms = filterQuery.length>=2 ? expandSearchQuery(filterQuery.toLowerCase()) : [];
     const filtered=getSortedFiltered();
     if(!filtered.length){resultArea.innerHTML=`<div class="empty-state"><div class="empty-icon">🔎</div><div>אין תוצאות — נסה מונח אחר או בדוק קיצורים.</div></div>`;return;}
 
