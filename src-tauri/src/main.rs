@@ -1517,9 +1517,15 @@ fn tantivy_index_exists(db_path: &str) -> bool {
 }
 
 fn open_db(path: &str) -> Result<OpenDb, String> {
+    // ⚡ perf (תיקון 7): SQLITE_OPEN_SHARED_CACHE — threads מרובים שפותחים
+    // את אותו DB ישתפו page-cache אחד בזיכרון, במקום שכל thread יטען את
+    // אותן pages מחדש מהדיסק. חיבור נפרד לכל thread עדיין נדרש (rusqlite
+    // אינו Sync), אבל הטעינה בפועל מהדיסק מתרחשת פעם אחת בלבד.
     let conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_SHARED_CACHE,
     )
     .map_err(|e| format!("שגיאה בפתיחת DB: {e}"))?;
 
@@ -1953,6 +1959,11 @@ struct CachedSefariaHit {
     url: String,
     fetched_at: i64,
 }
+
+// ⚡ perf (תיקון 8): cache בזיכרון — נטען מ-JSON פעם אחת בלבד כשה-command
+// רץ בפעם הראשונה, ונשמר חזרה לדיסק רק כשיש שינוי בפועל.
+// כל קריאות הרשת הבאות ממצאות ישירות מה-HashMap בזיכרון.
+struct SefariaState(Arc<Mutex<Option<HashMap<String, CachedSefariaHit>>>>);
 
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -2559,7 +2570,13 @@ fn compare_start(
                 .collect();
 
             if !to_check.is_empty() {
-                let mut sefaria_cache = load_sefaria_cache(&app);
+                // ⚡ perf (תיקון 8): קרא מה-state בזיכרון; טען מדיסק רק בפעם הראשונה
+                let sefaria_state = app.state::<SefariaState>();
+                let mut sefaria_guard = sefaria_state.0.lock().unwrap();
+                if sefaria_guard.is_none() {
+                    *sefaria_guard = Some(load_sefaria_cache(&app));
+                }
+                let mut sefaria_cache = sefaria_guard.as_mut().unwrap();
                 let now = now_unix();
 
                 // הפרדה בין הפניות שכבר יש להן תוצאה תקפה במטמון (תשובה
@@ -2694,7 +2711,11 @@ fn compare_start(
                     }
                 }
 
-                save_sefaria_cache(&app, &sefaria_cache);
+                // שמירה לדיסק — רק אם אכן שלפנו נתונים חדשים מ-Sefaria
+                if sefaria_found > 0 {
+                    save_sefaria_cache(&app, sefaria_cache);
+                }
+                drop(sefaria_guard); // שחרר את ה-lock בהקדם
             }
         }
 
@@ -3020,6 +3041,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(DbState(Arc::new(Mutex::new(None))))
         .manage(Jobs(Arc::new(Mutex::new(HashMap::new()))))
+        .manage(SefariaState(Arc::new(Mutex::new(None)))) // ⚡ cache בזיכרון
         .invoke_handler(tauri::generate_handler![
             compare_start,
             compare_abort,
@@ -3228,3 +3250,4 @@ mod tests {
         assert!(!is_recognized_source("ספר שאינו קיים כלל בעולם"));
     }
 }
+
