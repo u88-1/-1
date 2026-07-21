@@ -208,6 +208,7 @@ function addHistory(e){
     const h=loadHistory();h.unshift({...e,ts:Date.now()});
     if(h.length>50)h.length=50;
     localStorage.setItem('bm_history',JSON.stringify(h));
+    _historyDirty=true;
 }
 
 ['inputFile','dbPath'].forEach(id=>{
@@ -256,6 +257,7 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 });
 
 // ── הצגת דפים ─────────────────────────────────────────
+let _historyDirty = true;
 function showPage(name){
     if(!name)return;
     ['compare','history','biblio','aieditor','summarizer','about','settings'].forEach(p=>{
@@ -263,7 +265,7 @@ function showPage(name){
         if(el)el.style.display=p===name?'':'none';
     });
     document.querySelectorAll('.nav-link[data-page]').forEach(a=>a.classList.toggle('active',a.dataset.page===name));
-    if(name==='history')renderHistory();
+    if(name==='history'&&_historyDirty){renderHistory();_historyDirty=false;}
     if(name==='settings')loadSettingsUI();
 }
 document.querySelectorAll('.nav-link').forEach(a=>
@@ -501,9 +503,10 @@ function highlight(text,query){
     return esc(text).replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\$&')+')','gi'),'<mark class="hl">$1</mark>');
 }
 function highlightContent(text,query){
-    // הדגשה בתוך תוכן המאגר (content search)
+    // הדגשה בתוך תוכן — בטוחה ל-HTML: לא נוגעת בתוכן בתוך tags
     if(!query||query.length<2)return text;
-    return text.replace(new RegExp('('+query.replace(/[.*+?^${}()|[\]\\]/g,'\$&')+')','gi'),'<mark class="content-hl">$1</mark>');
+    const escaped=query.replace(/[.*+?^${}()|[\]\\]/g,'\$&');
+    return text.replace(new RegExp('('+escaped+')(?![^<]*>)','gi'),'<mark class="content-hl">$1</mark>');
 }
 function markRefInSentence(sentence,ref){
     const escaped=ref.replace(/[.*+?^${}()|[\]\\]/g,'\$&');
@@ -617,8 +620,10 @@ function renderSummary(r){
     const sefariaCount=r.sefariaFoundCount||0;
     const partialCount=Math.max(0,r.foundCount-sefariaCount-exactCount);
     const pct=r.totalRefs>0?Math.round(r.foundCount/r.totalRefs*100):0;
-    const avgConf=r.results?.length
-        ? Math.round(r.results.reduce((s,x)=>s+calcConfidence(x),0)/r.results.length)
+    // ⚡ perf: ממוצע רק על תוצאות שנמצאו בפועל
+    const foundResults = (r.results||[]).filter(x=>x.matchType!=='none'&&x.rows?.length>0);
+    const avgConf = foundResults.length
+        ? Math.round(foundResults.reduce((s,x)=>s+calcConfidence(x),0)/foundResults.length)
         : 0;
 
     // SVG ring
@@ -702,8 +707,11 @@ function renderToolbar(r){
         clearTimeout(debounceTimer);
         debounceTimer=setTimeout(()=>{contentSearchQuery=e.target.value.trim();currentPage=0;renderResults();},250);
     });
+    let sortDebounce=null;
     document.getElementById('sortModeSelect').addEventListener('change',e=>{
-        sortMode=e.target.value;currentPage=0;renderResults();
+        sortMode=e.target.value;currentPage=0;
+        clearTimeout(sortDebounce);
+        sortDebounce=setTimeout(renderResults,80);
     });
     toolbar.querySelectorAll('.filter-tab').forEach(btn=>btn.addEventListener('click',()=>{
         toolbar.querySelectorAll('.filter-tab').forEach(b=>b.classList.remove('active'));
@@ -972,10 +980,11 @@ function deleteHistoryItem(idx){
     const hist=loadHistory();
     hist.splice(idx,1);
     try{localStorage.setItem('bm_history',JSON.stringify(hist));}catch{}
+    _historyDirty=true;
     renderHistory();
 }
 document.getElementById('clearHistoryBtn')?.addEventListener('click',()=>{
-    if(confirm('למחוק את כל ההיסטוריה?')){localStorage.removeItem('bm_history');renderHistory();}
+    if(confirm('למחוק את כל ההיסטוריה?')){localStorage.removeItem('bm_history');_historyDirty=true;renderHistory();}
 });
 
 // ── Settings ──────────────────────────────────────────
@@ -1190,21 +1199,17 @@ document.addEventListener('click',(e)=>{
         if (activeIdx >= 0) cards[activeIdx]?.scrollIntoView({ block: 'nearest' });
     }
 
-    // חיפוש עם debounce (250ms — מהיר יותר)
+    // חיפוש רק על Enter — לא תוך כדי הקלדה
+    // ⚡ perf: searchId מבטיח שתוצאות חיפוש ישן לא ידרסו חיפוש חדש
+    let currentSearchId = 0;
     input.addEventListener('input', () => {
-        clearTimeout(searchTimer);
         const q = input.value.trim();
-        if (!q) { resultsEl.innerHTML = ''; statusEl.style.display = 'none'; return; }
-        if (q.length < 2) return;
-        // הצג spinner מיידי
-        statusEl.style.display = '';
-        statusEl.className = 'otz-status working';
-        statusEl.textContent = `מחפש "${q}"...`;
-        searchTimer = setTimeout(() => doSearch(q), 250);
+        if (!q) { resultsEl.innerHTML = ''; statusEl.style.display = 'none'; isSearching = false; return; }
     });
 
     async function doSearch(q) {
         if (!q || isSearching) return;
+        const searchId = ++currentSearchId;
         isSearching = true;
         activeIdx = -1;
 
@@ -1218,6 +1223,7 @@ document.addEventListener('click',(e)=>{
 
         try {
             const rows = await invoke('fts_search', { query: q, dbPath: dbPath || null, limit });
+            if (searchId !== currentSearchId) return; // חיפוש חדש התחיל — זרוק תוצאות ישנות
             lastResults = rows;
 
             if (!rows.length) {
