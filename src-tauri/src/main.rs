@@ -2573,7 +2573,8 @@ fn compare_start(
                 // ⚡ perf (תיקון 8 מתוקן): שלוף עותק מקומי תחת lock, שחרר מיד —
                 // lock של std::sync::Mutex אינו Send ולכן אסור להחזיק אותו בזמן await.
                 let mut sefaria_cache: HashMap<String, CachedSefariaHit> = {
-                    let mut guard = app.state::<SefariaState>().0.lock().unwrap();
+                    let state = app.state::<SefariaState>();
+                    let mut guard = state.0.lock().unwrap();
                     if guard.is_none() {
                         *guard = Some(load_sefaria_cache(&app));
                     }
@@ -2718,7 +2719,8 @@ fn compare_start(
                 if sefaria_found > 0 {
                     save_sefaria_cache(&app, &sefaria_cache);
                     // נעל שוב רק לעדכון — אין await אחרי זה
-                    let mut guard = app.state::<SefariaState>().0.lock().unwrap();
+                    let state = app.state::<SefariaState>();
+                    let mut guard = state.0.lock().unwrap();
                     *guard = Some(sefaria_cache);
                 }
             }
