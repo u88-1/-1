@@ -1925,13 +1925,31 @@ async function wireGeminiKeyInput(inputEl){
                 j++;
                 continue;
             }
-            let cleanA = (wordsA[i] || "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
-            let cleanB = wB.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
-            if (cleanA === cleanB || i >= wordsA.length) {
-                createAiSpan(wB, (i >= wordsA.length || wordsA[i] !== wB) ? 'added' : 'match', container);
-                if (i < wordsA.length) i++;
+            // אם wordsA נגמר — שאר wordsB הם תוספות AI
+            if (i >= wordsA.length) {
+                createAiSpan(wB, 'added', container);
                 j++;
-            } else { i++; }
+                continue;
+            }
+            let cleanA = wordsA[i].replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+            let cleanB = wB.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+            if (cleanA === cleanB) {
+                createAiSpan(wB, wordsA[i] !== wB ? 'added' : 'match', container);
+                i++; j++;
+            } else {
+                // wordsA[i] לא תואם — דלג קדימה ב-A (מקסימום 3 צעדים למנוע תקיעה)
+                let skipped = 0;
+                while (i < wordsA.length && skipped < 3) {
+                    const nextCleanA = wordsA[i].replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+                    if (nextCleanA === cleanB) break;
+                    i++; skipped++;
+                }
+                if (i >= wordsA.length || wordsA[i]?.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"") !== cleanB) {
+                    // לא נמצא התאמה — הוסף כתוספת
+                    createAiSpan(wB, 'added', container);
+                    j++;
+                }
+            }
         }
         updateAiPreview();
     };
