@@ -2570,13 +2570,15 @@ fn compare_start(
                 .collect();
 
             if !to_check.is_empty() {
-                // ⚡ perf (תיקון 8): קרא מה-state בזיכרון; טען מדיסק רק בפעם הראשונה
-                let sefaria_state = app.state::<SefariaState>();
-                let mut sefaria_guard = sefaria_state.0.lock().unwrap();
-                if sefaria_guard.is_none() {
-                    *sefaria_guard = Some(load_sefaria_cache(&app));
-                }
-                let mut sefaria_cache = sefaria_guard.as_mut().unwrap();
+                // ⚡ perf (תיקון 8 מתוקן): שלוף עותק מקומי תחת lock, שחרר מיד —
+                // lock של std::sync::Mutex אינו Send ולכן אסור להחזיק אותו בזמן await.
+                let mut sefaria_cache: HashMap<String, CachedSefariaHit> = {
+                    let mut guard = app.state::<SefariaState>().0.lock().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(load_sefaria_cache(&app));
+                    }
+                    guard.as_ref().unwrap().clone() // clone → lock משתחרר בסוף הבלוק
+                };
                 let now = now_unix();
 
                 // הפרדה בין הפניות שכבר יש להן תוצאה תקפה במטמון (תשובה
@@ -2656,6 +2658,7 @@ fn compare_start(
                         });
                     }
 
+                    // await ללא lock — בטוח לחלוטין
                     while let Some(joined) = set.join_next().await {
                         if let Ok((idx, spath, Some(hit))) = joined {
                             sefaria_cache.insert(
@@ -2711,11 +2714,13 @@ fn compare_start(
                     }
                 }
 
-                // שמירה לדיסק — רק אם אכן שלפנו נתונים חדשים מ-Sefaria
+                // שמירה לדיסק + עדכון ה-state בזיכרון — רק אם היו שינויים
                 if sefaria_found > 0 {
-                    save_sefaria_cache(&app, sefaria_cache);
+                    save_sefaria_cache(&app, &sefaria_cache);
+                    // נעל שוב רק לעדכון — אין await אחרי זה
+                    let mut guard = app.state::<SefariaState>().0.lock().unwrap();
+                    *guard = Some(sefaria_cache);
                 }
-                drop(sefaria_guard); // שחרר את ה-lock בהקדם
             }
         }
 
