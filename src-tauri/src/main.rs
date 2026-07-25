@@ -1176,8 +1176,12 @@ async fn call_gemini(
 
     let mut cfg = serde_json::Map::new();
     if let Some(t) = temperature { cfg.insert("temperature".to_string(), serde_json::json!(t)); }
-    if let Some(m) = max_output_tokens { cfg.insert("maxOutputTokens".to_string(), serde_json::json!(m)); }
-    if !cfg.is_empty() { body["generationConfig"] = serde_json::Value::Object(cfg); }
+    // maxOutputTokens — הגבל ל-8192 אם לא נקבע, כדי למנוע תגובות ארוכות שגורמות לקריסה
+    let tokens = max_output_tokens.unwrap_or(8192);
+    cfg.insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
+    // thinkingBudget=0: מבטל "חשיבה" פנימית ארוכה של Gemini 2.x שגורמת ל-timeout
+    cfg.insert("thinkingConfig".to_string(), serde_json::json!({ "thinkingBudget": 0 }));
+    body["generationConfig"] = serde_json::Value::Object(cfg);
 
     let response = client
         .post(&url)
@@ -3257,4 +3261,5 @@ mod tests {
         assert!(!is_recognized_source("ספר שאינו קיים כלל בעולם"));
     }
 }
+
 
