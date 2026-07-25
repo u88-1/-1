@@ -672,8 +672,14 @@ function renderToolbar(r){
     toolbar.id='resultsToolbar';toolbar.className='results-toolbar';
     toolbar.innerHTML=`
         <div class="toolbar-right">
-            <input id="filterInput" class="filter-input" type="text" placeholder='חפש: ב"ק, ישעיה, או"ח...' title="חיפוש חכם: מזהה קיצורים ווריאציות כתיב. קיצור Ctrl+F" />
-            <input id="contentSearchInput" class="filter-input content-search-input" type="text" placeholder="🔍 חפש בתוכן..." title="חיפוש בתוכן המאגר עצמו. קיצור Ctrl+G" />
+            <div class="search-field-wrap">
+                <svg class="search-field-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                <input id="filterInput" class="filter-input" type="text" placeholder='שם מקור: ב"ק, ישעיה, או"ח...' title="חיפוש חכם: מזהה קיצורים ווריאציות כתיב. קיצור Ctrl+F" />
+            </div>
+            <div class="search-field-wrap content-wrap">
+                <svg class="search-field-icon content-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 8h6M7 12h4"/></svg>
+                <input id="contentSearchInput" class="filter-input content-search-input" type="text" placeholder="חיפוש בתוכן..." title="חיפוש בתוכן המאגר עצמו. קיצור Ctrl+G" />
+            </div>
             <div class="filter-tabs">
                 <button class="filter-tab active" data-status="all">הכל <span class="tab-count">${r.results.length}</span></button>
                 <button class="filter-tab" data-status="found">נמצאו <span class="tab-count s-found">${r.foundCount}</span></button>
@@ -1892,7 +1898,17 @@ async function wireGeminiKeyInput(inputEl){
             // הסיבה ל"Failed to fetch" הסתמי). כל לוגיקת הזיהוי (quota/
             // מפתח לא תקין/חסימת בטיחות) רצה עכשיו בצד Rust בפקודת
             // call_gemini, עם אותן הודעות שגיאה בדיוק.
-            const resultText = await invoke('call_gemini', { prompt, apiKey: key, model });
+            // timeout 90 שניות — מונע קריסת התוכנה כשה-AI לוקח זמן רב
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(
+                    'הבקשה ל-Gemini לקחה יותר מ-90 שניות.\n' +
+                    'ייתכן שהטקסט ארוך מדי — נסה לחלק אותו לקטעים קצרים יותר.'
+                )), 90000)
+            );
+            const resultText = await Promise.race([
+                invoke('call_gemini', { prompt, apiKey: key, model }),
+                timeoutPromise
+            ]);
 
             document.getElementById('aiTextB').value = resultText;
             aiStatusDiv.className = 'status-bar ok';
@@ -2313,3 +2329,4 @@ function wireAutoBracketDetection(textareaId, radioGroupName, hintId){
 
 wireAutoBracketDetection('pasteTextArea', 'brackets', 'bracketsAutoHint');
 wireAutoBracketDetection('biblioText', 'biblioBrackets', 'biblioBracketsAutoHint');
+
