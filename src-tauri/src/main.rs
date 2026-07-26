@@ -1145,6 +1145,20 @@ fn delete_gemini_key() -> Result<(), String> {
     Ok(())
 }
 
+/// חיתוך מחרוזת עד max_bytes בלי לקרוס על גבול UTF-8 (קריטי כי
+/// panic="abort" ב-release — panic כאן היה מפיל את כל התוכנה בשקט,
+/// במיוחד עם טקסט עברי/יוניקוד שבו רוב הבתים אינם גבול תו תקין).
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// קריאה ל-Gemini API דרך Rust
 #[tauri::command]
 async fn call_gemini(
@@ -1204,7 +1218,7 @@ async fn call_gemini(
 
     // נסה לפענח JSON
     let data: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|_| format!("תגובה לא תקינה מ-Gemini (HTTP {}): {}", status, &body_text[..body_text.len().min(300)]))?;
+        .map_err(|_| format!("תגובה לא תקינה מ-Gemini (HTTP {}): {}", status, safe_truncate(&body_text, 300)))?;
 
     // שגיאת API מפורשת
     if let Some(err) = data.get("error") {
@@ -1261,7 +1275,7 @@ async fn call_gemini(
                 .unwrap_or("לא ידועה");
             Err(format!(
                 "Gemini לא החזיר תוצאה (סיבה: {}).\nייתכן שהטקסט ארוך מדי. נסה טקסט קצר יותר.\n\nתגובה מלאה:\n{}",
-                reason, &body_text[..body_text.len().min(500)]
+                reason, safe_truncate(&body_text, 500)
             ))
         }
     }
