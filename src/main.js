@@ -5,7 +5,10 @@ const { listen } = window.__TAURI__.event;
 // מסמך שלם, ומאפשר להמשיך אם קטע בודד נכשל בלי לאבד את כל העבודה.
 // שומר על שלמות פסקאות כשאפשר; רק פסקה בודדת שחורגת מהמגבלה בעצמה
 // (נדיר) מפוצלת לפי רווחים כדי לא לחתוך באמצע מילה.
-const AI_CHUNK_MAX_CHARS = 4000;
+// 1800 (ולא 4000) כי המשימה (מקורות + פיצוח ר"ת + פיסוק) מנפחת את
+// הטקסט פי 2-3, וקטע גדול מדי עלול לחרוג מ-8192 טוקני הפלט המקסימליים
+// של Gemini 1.5/2.0 (MAX_TOKENS) - מה שגורם לתשובה חתוכה.
+const AI_CHUNK_MAX_CHARS = 1800;
 function splitTextForAI(text, maxChars = AI_CHUNK_MAX_CHARS) {
     const paragraphs = text.split(/\n{2,}/);
     const chunks = [];
