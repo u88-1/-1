@@ -1,6 +1,43 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// מפצל טקסט ארוך לקטעים לעיבוד AI ברצף — מונע MAX_TOKENS/timeout על
+// מסמך שלם, ומאפשר להמשיך אם קטע בודד נכשל בלי לאבד את כל העבודה.
+// שומר על שלמות פסקאות כשאפשר; רק פסקה בודדת שחורגת מהמגבלה בעצמה
+// (נדיר) מפוצלת לפי רווחים כדי לא לחתוך באמצע מילה.
+const AI_CHUNK_MAX_CHARS = 4000;
+function splitTextForAI(text, maxChars = AI_CHUNK_MAX_CHARS) {
+    const paragraphs = text.split(/\n{2,}/);
+    const chunks = [];
+    let current = '';
+    for (const para of paragraphs) {
+        const candidate = current ? `${current}\n\n${para}` : para;
+        if (candidate.length <= maxChars) {
+            current = candidate;
+            continue;
+        }
+        if (current) {
+            chunks.push(current);
+            current = '';
+        }
+        if (para.length <= maxChars) {
+            current = para;
+            continue;
+        }
+        // פסקה בודדת ארוכה מהמגבלה — פיצול לפי רווח קרוב ביותר לגבול
+        let rest = para;
+        while (rest.length > maxChars) {
+            let cut = rest.lastIndexOf(' ', maxChars);
+            if (cut <= 0) cut = maxChars;
+            chunks.push(rest.slice(0, cut));
+            rest = rest.slice(cut).trim();
+        }
+        current = rest;
+    }
+    if (current) chunks.push(current);
+    return chunks.length ? chunks : [text];
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  🔍 מודול חיפוש חכם — קיצורים, וריאציות, ציון ביטחון
 // ════════════════════════════════════════════════════════════════════
@@ -1891,29 +1928,65 @@ async function wireGeminiKeyInput(inputEl){
             const fullInstruction = customInstruction
                 ? `${basePrompt}\n\nהנחיה נוספת מהמשתמש (בצע גם אותה):\n${customInstruction}`
                 : basePrompt;
-            const prompt = fullInstruction + "\n\n" + txt;
 
-            // invoke דרך Rust במקום fetch() ישיר מה-JS — עוקף לחלוטין את
-            // חסימת ה-CORS שה-webview עלול להטיל על תגובות מ-Google (זו
-            // הסיבה ל"Failed to fetch" הסתמי). כל לוגיקת הזיהוי (quota/
-            // מפתח לא תקין/חסימת בטיחות) רצה עכשיו בצד Rust בפקודת
-            // call_gemini, עם אותן הודעות שגיאה בדיוק.
-            // timeout 90 שניות — מונע קריסת התוכנה כשה-AI לוקח זמן רב
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(
-                    'הבקשה ל-Gemini לקחה יותר מ-90 שניות.\n' +
-                    'ייתכן שהטקסט ארוך מדי — נסה לחלק אותו לקטעים קצרים יותר.'
-                )), 90000)
-            );
-            const resultText = await Promise.race([
-                invoke('call_gemini', { prompt, apiKey: key, model }),
-                timeoutPromise
-            ]);
+            // פיצול מסמכים ארוכים — מונע MAX_TOKENS/timeout על טקסט ארוך,
+            // ומאפשר להמשיך גם אם קטע בודד נכשל (במקום לאבד את כל העבודה).
+            // מפצל לפי פסקאות (שומר על שלמות פסקה כשאפשר), ורק פסקה בודדת
+            // שחורגת מהמגבלה בעצמה מפוצלת לפי רווחים.
+            const chunks = splitTextForAI(txt);
+            const results = [];
+            const failedChunks = [];
 
+            for (let i = 0; i < chunks.length; i++) {
+                if (chunks.length > 1) {
+                    aiStatusDiv.innerText = `מעבד קטע ${i + 1} מתוך ${chunks.length}...`;
+                }
+
+                // invoke דרך Rust במקום fetch() ישיר מה-JS — עוקף לחלוטין את
+                // חסימת ה-CORS שה-webview עלול להטיל על תגובות מ-Google (זו
+                // הסיבה ל"Failed to fetch" הסתמי). כל לוגיקת הזיהוי (quota/
+                // מפתח לא תקין/חסימת בטיחות) רצה עכשיו בצד Rust בפקודת
+                // call_gemini, עם אותן הודעות שגיאה בדיוק.
+                // timeout 90 שניות לכל קטע — מונע קריסת התוכנה כשה-AI לוקח זמן רב
+                const chunkPrompt = fullInstruction + "\n\n" + chunks[i];
+                try {
+                    const timeoutPromise = new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error(
+                            `הבקשה ל-Gemini (קטע ${i + 1}) לקחה יותר מ-90 שניות.`
+                        )), 90000)
+                    );
+                    const chunkResult = await Promise.race([
+                        invoke('call_gemini', { prompt: chunkPrompt, apiKey: key, model }),
+                        timeoutPromise
+                    ]);
+                    results.push(chunkResult);
+                } catch (chunkErr) {
+                    // ממשיכים לקטע הבא — לא מאבדים את כל העבודה בגלל קטע אחד
+                    // שנכשל. הטקסט המקורי של הקטע נשמר (מסומן) כדי שלא ייעלם.
+                    failedChunks.push(i + 1);
+                    results.push(
+                        `\n[⚠️ קטע ${i + 1} נכשל ולא עובד — הטקסט המקורי הושאר ללא שינוי. ` +
+                        `שגיאה: ${(chunkErr && chunkErr.message) || chunkErr}]\n${chunks[i]}`
+                    );
+                }
+            }
+
+            const resultText = results.join('\n\n');
             document.getElementById('aiTextB').value = resultText;
-            aiStatusDiv.className = 'status-bar ok';
-            aiStatusDiv.innerText = "העיבוד הושלם בהצלחה!";
-            setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
+
+            if (failedChunks.length > 0) {
+                aiStatusDiv.className = 'status-bar error';
+                aiStatusDiv.style.whiteSpace = 'pre-wrap';
+                aiStatusDiv.innerText =
+                    `הושלם, אך ${failedChunks.length} מתוך ${chunks.length} קטעים נכשלו ` +
+                    `(מס' ${failedChunks.join(', ')}) — הטקסט המקורי שלהם נשמר ללא שינוי בתוצאה.`;
+            } else {
+                aiStatusDiv.className = 'status-bar ok';
+                aiStatusDiv.innerText = chunks.length > 1
+                    ? `העיבוד הושלם בהצלחה! (${chunks.length} קטעים)`
+                    : "העיבוד הושלם בהצלחה!";
+                setTimeout(() => aiStatusDiv.style.display = 'none', 3000);
+            }
         } catch (e) {
             aiStatusDiv.className = 'status-bar error';
             aiStatusDiv.style.whiteSpace = 'pre-wrap';
