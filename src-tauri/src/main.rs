@@ -1227,8 +1227,17 @@ async fn call_gemini(
         if msg.contains("quota") || code == Some(429) {
             return Err(format!("שגיאת מכסה (Quota): המודל {} חסום כרגע.\nנסה מודל אחר או המתן מספר דקות.", model));
         }
-        if msg.contains("API key") || code == Some(400) || code == Some(403) {
-            return Err("מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio.".to_string());
+        // רק שגיאה שבאמת קשורה למפתח (401, או ההודעה עצמה מזכירה
+        // מפורשות "API key") מסווגת ככזו. code 400/403 יכולים לנבוע
+        // מסיבות רבות ושונות לגמרי (פרמטר לא נתמך, תוכן חסום, פרומפט
+        // ריק וכו') - הצגת "מפתח לא תקין" בכל 400 הייתה מטעה ומסתירה
+        // את הסיבה האמיתית.
+        let msg_lower = msg.to_lowercase();
+        if msg_lower.contains("api key") || msg_lower.contains("api_key") || code == Some(401) {
+            return Err(format!(
+                "מפתח ה-API לא תקין או לא מורשה.\nבדוק שהעתקת אותו נכון מ-Google AI Studio.\n\nהודעה מקורית מ-Gemini: {}",
+                msg
+            ));
         }
         if msg.contains("not found") || code == Some(404) {
             return Err(format!("המודל \"{}\" לא נמצא.\nייתכן שהוא לא זמין בחשבונך — נסה Gemini 2.0 Flash.", model));
