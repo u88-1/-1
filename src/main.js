@@ -41,6 +41,60 @@ function splitTextForAI(text, maxChars = AI_CHUNK_MAX_CHARS) {
     return chunks.length ? chunks : [text];
 }
 
+// כמה פעמים מותר לפצל קטע שחרג מ-MAX_TOKENS לפני שמוותרים עליו
+const AI_MAX_SPLIT_DEPTH = 5;
+// מתחת לגודל הזה אין טעם לפצל עוד (קטע כזה חורג מ-MAX_TOKENS מסיבה
+// אחרת, לא בגלל אורך - פיצול נוסף לא יעזור)
+const AI_MIN_SPLIT_CHARS = 300;
+
+// מעבד קטע טקסט בודד מול Gemini. אם התשובה נחתכת עקב MAX_TOKENS
+// (מגבלת 8192 טוקני הפלט של המודל) - במקום לוותר ולהחזיר את הטקסט
+// המקורי, מפצלים את הקטע לשניים (בגבול פסקה/רווח קרוב לאמצע) ומעבדים
+// כל חצי בנפרד רקורסיבית, עד שכל תת-קטע קטן מספיק לקבל תשובה מלאה.
+// כך התוצאה הסופית תמיד שלמה - בלי חיתוכים - גם אם זה אומר יותר
+// קריאות API לקטעים ארוכים במיוחד.
+async function processChunkForAI(text, instruction, key, model, onProgress, depth = 0) {
+    const prompt = instruction + "\n\n" + text;
+    try {
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(
+                'הבקשה ל-Gemini לקחה יותר מ-90 שניות.'
+            )), 90000)
+        );
+        const result = await Promise.race([
+            invoke('call_gemini', { prompt, apiKey: key, model }),
+            timeoutPromise
+        ]);
+        return { ok: true, text: result };
+    } catch (err) {
+        const msg = (err && err.message) || String(err);
+        const isMaxTokens = msg.includes('מגבלת האורך');
+
+        if (isMaxTokens && depth < AI_MAX_SPLIT_DEPTH && text.length > AI_MIN_SPLIT_CHARS) {
+            if (onProgress) onProgress('התשובה ארוכה מדי — מפצל קטע לשניים ומנסה שוב...');
+            const mid = Math.floor(text.length / 2);
+            let cut = text.lastIndexOf('\n\n', mid);
+            if (cut < text.length * 0.15) cut = -1; // חתך גרוע מדי, קרוב לקצה
+            if (cut === -1) cut = text.lastIndexOf(' ', mid);
+            if (cut <= 0) cut = mid;
+            const firstHalf = text.slice(0, cut).trim();
+            const secondHalf = text.slice(cut).trim();
+
+            const r1 = await processChunkForAI(firstHalf, instruction, key, model, onProgress, depth + 1);
+            const r2 = await processChunkForAI(secondHalf, instruction, key, model, onProgress, depth + 1);
+            return { ok: r1.ok && r2.ok, text: `${r1.text}\n\n${r2.text}` };
+        }
+
+        // שגיאה אחרת (לא MAX_TOKENS), או שכבר פוצל למקסימום/למינימום
+        // ועדיין נכשל - מוותרים על תת-הקטע הזה ושומרים את המקור.
+        return {
+            ok: false,
+            text: `\n[⚠️ קטע נכשל ולא עובד — הטקסט המקורי הושאר ללא שינוי. ` +
+                  `שגיאה: ${msg}]\n${text}`
+        };
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  🔍 מודול חיפוש חכם — קיצורים, וריאציות, ציון ביטחון
 // ════════════════════════════════════════════════════════════════════
@@ -1950,27 +2004,15 @@ async function wireGeminiKeyInput(inputEl){
                 // הסיבה ל"Failed to fetch" הסתמי). כל לוגיקת הזיהוי (quota/
                 // מפתח לא תקין/חסימת בטיחות) רצה עכשיו בצד Rust בפקודת
                 // call_gemini, עם אותן הודעות שגיאה בדיוק.
-                // timeout 90 שניות לכל קטע — מונע קריסת התוכנה כשה-AI לוקח זמן רב
-                const chunkPrompt = fullInstruction + "\n\n" + chunks[i];
-                try {
-                    const timeoutPromise = new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error(
-                            `הבקשה ל-Gemini (קטע ${i + 1}) לקחה יותר מ-90 שניות.`
-                        )), 90000)
-                    );
-                    const chunkResult = await Promise.race([
-                        invoke('call_gemini', { prompt: chunkPrompt, apiKey: key, model }),
-                        timeoutPromise
-                    ]);
-                    results.push(chunkResult);
-                } catch (chunkErr) {
-                    // ממשיכים לקטע הבא — לא מאבדים את כל העבודה בגלל קטע אחד
-                    // שנכשל. הטקסט המקורי של הקטע נשמר (מסומן) כדי שלא ייעלם.
+                // אם קטע חורג מ-MAX_TOKENS - processChunkForAI מפצל אותו
+                // אוטומטית לשניים ומנסה שוב, כך שהתוצאה הסופית תמיד שלמה.
+                const chunkResult = await processChunkForAI(
+                    chunks[i], fullInstruction, key, model,
+                    (progressMsg) => { aiStatusDiv.innerText = `קטע ${i + 1} מתוך ${chunks.length}: ${progressMsg}`; }
+                );
+                results.push(chunkResult.text);
+                if (!chunkResult.ok) {
                     failedChunks.push(i + 1);
-                    results.push(
-                        `\n[⚠️ קטע ${i + 1} נכשל ולא עובד — הטקסט המקורי הושאר ללא שינוי. ` +
-                        `שגיאה: ${(chunkErr && chunkErr.message) || chunkErr}]\n${chunks[i]}`
-                    );
                 }
             }
 
