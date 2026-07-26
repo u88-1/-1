@@ -31,7 +31,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # ── Async runtime ל-Sefaria fallback בלבד ─────────────────────────────
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "native-tls-alpn"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 
 # ── Regex ─────────────────────────────────────────────────────────────
 # fancy-regex נדרש ל-lookbehind/lookahead שבמנוע הנרמול (regex הרגיל לא תומך)
