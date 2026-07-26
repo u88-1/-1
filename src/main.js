@@ -1,51 +1,34 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// מפצל טקסט ארוך לקטעים לעיבוד AI ברצף — מונע MAX_TOKENS/timeout על
-// מסמך שלם, ומאפשר להמשיך אם קטע בודד נכשל בלי לאבד את כל העבודה.
-// שומר על שלמות פסקאות כשאפשר; רק פסקה בודדת שחורגת מהמגבלה בעצמה
-// (נדיר) מפוצלת לפי רווחים כדי לא לחתוך באמצע מילה.
-// 1800 (ולא 4000) כי המשימה (מקורות + פיצוח ר"ת + פיסוק) מנפחת את
-// הטקסט פי 2-3, וקטע גדול מדי עלול לחרוג מ-8192 טוקני הפלט המקסימליים
-// של Gemini 1.5/2.0 (MAX_TOKENS) - מה שגורם לתשובה חתוכה.
-const AI_CHUNK_MAX_CHARS = 1800;
+// גודל קטע יעד. אפשר להעלות (במקום מספר שמרני יותר) כי יש רשת
+// ביטחון: אם קטע בודד עדיין חורג מ-MAX_TOKENS, processChunkForAI
+// למטה מפצל אותו אוטומטית לשניים בזמן ריצה - אז אין צורך "לפחד"
+// מקטעים גדולים מלכתחילה.
+const AI_CHUNK_MAX_CHARS = 3000;
+
+// מפצל טקסט ארוך לקטעים לעיבוד AI ברצף, עם fallback מדורג לנקודת
+// החיתוך (בהשראת יישום קודם שנבדק): קודם מנסים לחתוך בגבול פסקה
+// (\n\n) קרוב לגודל היעד; אם הכי קרוב עדיין רחוק מדי (פחות מחצי
+// מהיעד) עוברים לירידת שורה בודדת (\n); אם עדיין רחוק - סוף משפט
+// ('. '); ורק אם הכל נכשל (פחות מ-30% מהיעד) - חיתוך "גס" בדיוק בגבול
+// התווים. קריטי עבור טקסט שכולו פסקה אחת ענקית בלי שום ירידת שורה
+// (שכיח בטקסטים תורניים) - גישה קודמת שהתבססה על שילוב פסקאות שלמות
+// בלבד הייתה נופלת לחיתוך גס-מדי (רווח בלבד) במקרה כזה.
 function splitTextForAI(text, maxChars = AI_CHUNK_MAX_CHARS) {
-    const paragraphs = text.split(/\n{2,}/);
+    if (text.length <= maxChars) return [text];
     const chunks = [];
-    let current = '';
-    for (const para of paragraphs) {
-        const candidate = current ? `${current}\n\n${para}` : para;
-        if (candidate.length <= maxChars) {
-            current = candidate;
-            continue;
-        }
-        if (current) {
-            chunks.push(current);
-            current = '';
-        }
-        if (para.length <= maxChars) {
-            current = para;
-            continue;
-        }
-        // פסקה בודדת ארוכה מהמגבלה (בלי שום \n\n פנימי) — זה בדיוק
-        // המקרה שגרם לחיתוך אצלך: קטע ארוך אחד בלי שום שבירת שורה.
-        // פיצול מדורג בהשראת דוגמה חיצונית: מנסים חיתוך "טבעי" יותר
-        // קודם (שורה בודדת → סוף משפט) ורק אם זה נופל קרוב מדי להתחלה
-        // (פחות מ-50%/50% מהמגבלה) עוברים לחיתוך גס יותר, ורק כמוצא
-        // אחרון (פחות מ-30%) חותכים בדיוק בגבול התווים.
-        let rest = para;
-        while (rest.length > maxChars) {
-            let cut = rest.lastIndexOf('\n', maxChars);
-            if (cut < maxChars * 0.5) cut = rest.lastIndexOf('. ', maxChars);
-            if (cut < maxChars * 0.5) cut = rest.lastIndexOf(' ', maxChars);
-            if (cut < maxChars * 0.3) cut = maxChars;
-            chunks.push(rest.slice(0, cut).trim());
-            rest = rest.slice(cut).trimStart();
-        }
-        current = rest;
+    let rest = text;
+    while (rest.length > maxChars) {
+        let cut = rest.lastIndexOf('\n\n', maxChars);
+        if (cut < maxChars * 0.5) cut = rest.lastIndexOf('\n', maxChars);
+        if (cut < maxChars * 0.5) cut = rest.lastIndexOf('. ', maxChars);
+        if (cut < maxChars * 0.3) cut = maxChars;
+        chunks.push(rest.slice(0, cut));
+        rest = rest.slice(cut).trimStart();
     }
-    if (current) chunks.push(current);
-    return chunks.length ? chunks : [text];
+    if (rest.length) chunks.push(rest);
+    return chunks;
 }
 
 // כמה פעמים מותר לפצל קטע שחרג מ-MAX_TOKENS לפני שמוותרים עליו
