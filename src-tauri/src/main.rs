@@ -3084,7 +3084,56 @@ fn fts_search(
 //  12. כניסת התוכנית — Tray + הסתרת חלון בסגירה
 // ════════════════════════════════════════════════════════════════════════════
 
+/// נתיב קובץ הלוג לתיעוד קריסות (panic). אותה תיקיית AppData כמו מפתח
+/// Gemini fallback, כדי לא לפזר קבצים על פני המערכת.
+fn crash_log_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("APPDATA").ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs_next::data_dir())?;
+    let dir = base.join("com.bodek-mekorot.app");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("crash_log.txt"))
+}
+
+/// panic hook — קריטי כי panic="abort" ב-Cargo.toml (release) הופך כל
+/// panic להיעלמות מוחלטת של התוכנה בלי שום הודעה. ה-hook הזה רץ *לפני*
+/// ה-abort בפועל, כותב לקובץ לוג מקומי את הודעת ה-panic + מיקום +
+/// timestamp, כך שבפעם הבאה שמשהו קורס יש תיעוד מדויק לאבחון, במקום
+/// שהמשתמש רק ידווח "התוכנה נעלמה" בלי שום פרט.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "מיקום לא ידוע".to_string());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic ללא הודעת טקסט".to_string()
+        };
+        let entry = format!(
+            "\n[{ts}] קריסה (panic)\nמיקום: {location}\nהודעה: {msg}\n{sep}\n",
+            sep = "─".repeat(60)
+        );
+        if let Some(path) = crash_log_path() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = f.write_all(entry.as_bytes());
+            }
+        }
+        // עדיין מדפיסים ל-stderr (שימושי כשמריצים עם console פתוח / cargo run)
+        eprintln!("{entry}");
+    }));
+}
+
 fn main() {
+    install_panic_hook();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(DbState(Arc::new(Mutex::new(None))))
