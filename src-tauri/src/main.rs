@@ -1193,8 +1193,14 @@ async fn call_gemini(
     // maxOutputTokens — הגבל ל-8192 אם לא נקבע, כדי למנוע תגובות ארוכות שגורמות לקריסה
     let tokens = max_output_tokens.unwrap_or(8192);
     cfg.insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
-    // thinkingBudget=0: מבטל "חשיבה" פנימית ארוכה של Gemini 2.x שגורמת ל-timeout
-    cfg.insert("thinkingConfig".to_string(), serde_json::json!({ "thinkingBudget": 0 }));
+    // thinkingBudget=0: מבטל "חשיבה" פנימית ארוכה של Gemini 2.5+ שגורמת
+    // ל-timeout. קריטי: השדה thinkingConfig נתמך *רק* ב-Gemini 2.5+ —
+    // שליחתו למודלים ישנים יותר (1.5/2.0, שהם כל המודלים שבתפריט
+    // הבחירה כרגע!) גורמת ל-Gemini לדחות את כל הבקשה עם 400
+    // INVALID_ARGUMENT, מה שהיה נראה כמו "מפתח API לא תקין".
+    if model.starts_with("gemini-2.5") || model.starts_with("gemini-3") {
+        cfg.insert("thinkingConfig".to_string(), serde_json::json!({ "thinkingBudget": 0 }));
+    }
     body["generationConfig"] = serde_json::Value::Object(cfg);
 
     let response = client
