@@ -27,13 +27,20 @@ function splitTextForAI(text, maxChars = AI_CHUNK_MAX_CHARS) {
             current = para;
             continue;
         }
-        // פסקה בודדת ארוכה מהמגבלה — פיצול לפי רווח קרוב ביותר לגבול
+        // פסקה בודדת ארוכה מהמגבלה (בלי שום \n\n פנימי) — זה בדיוק
+        // המקרה שגרם לחיתוך אצלך: קטע ארוך אחד בלי שום שבירת שורה.
+        // פיצול מדורג בהשראת דוגמה חיצונית: מנסים חיתוך "טבעי" יותר
+        // קודם (שורה בודדת → סוף משפט) ורק אם זה נופל קרוב מדי להתחלה
+        // (פחות מ-50%/50% מהמגבלה) עוברים לחיתוך גס יותר, ורק כמוצא
+        // אחרון (פחות מ-30%) חותכים בדיוק בגבול התווים.
         let rest = para;
         while (rest.length > maxChars) {
-            let cut = rest.lastIndexOf(' ', maxChars);
-            if (cut <= 0) cut = maxChars;
-            chunks.push(rest.slice(0, cut));
-            rest = rest.slice(cut).trim();
+            let cut = rest.lastIndexOf('\n', maxChars);
+            if (cut < maxChars * 0.5) cut = rest.lastIndexOf('. ', maxChars);
+            if (cut < maxChars * 0.5) cut = rest.lastIndexOf(' ', maxChars);
+            if (cut < maxChars * 0.3) cut = maxChars;
+            chunks.push(rest.slice(0, cut).trim());
+            rest = rest.slice(cut).trimStart();
         }
         current = rest;
     }
