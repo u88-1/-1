@@ -1475,19 +1475,38 @@ pub fn build_tantivy_index(db_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -> Vec<i64> {
-    let idx_path = tantivy_index_path(db_path);
-    if !idx_path.exists() { return vec![]; }
-    let Ok(index) = Index::open_in_dir(&idx_path) else { return vec![]; };
-    let Ok(reader) = index.reader_builder()
-        .reload_policy(ReloadPolicy::Manual)
-        .try_into() else { return vec![]; };
-    let searcher = reader.searcher();
-    let schema  = index.schema();
-    let fld_id  = schema.get_field("line_id").unwrap();
-    let fld_ref = schema.get_field("he_ref").unwrap();
+/// כל מה שנדרש כדי לחפש ב-Tantivy בלי לפתוח מחדש את ה-index מהדיסק בכל
+/// קריאה. נבנה פעם אחת בתחילת scan_chunk (פעם אחת לכל thread), ולא בכל
+/// הפניה/וריאנט בנפרד — זו הייתה תקלת ביצועים חמורה: לפני התיקון,
+/// Index::open_in_dir רץ מחדש עבור *כל* וריאנט של *כל* הפניה (עד 8
+/// פעמים על כל הפניה!), מה שהפך מסמך עם מאות הפניות לאיטי מאוד/נתקע —
+/// למרות שה-index עצמו כלל לא השתנה בין קריאה לקריאה.
+struct TantivyHandle {
+    searcher: tantivy::Searcher,
+    qp: QueryParser,
+    fld_id: tantivy::schema::Field,
+}
 
+fn open_tantivy_handle(db_path: &str) -> Option<TantivyHandle> {
+    let idx_path = tantivy_index_path(db_path);
+    if !idx_path.join("meta.json").exists() {
+        return None;
+    }
+    let index = Index::open_in_dir(&idx_path).ok()?;
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::Manual)
+        .try_into()
+        .ok()?;
+    let searcher = reader.searcher();
+    let schema = index.schema();
+    let fld_id = schema.get_field("line_id").ok()?;
+    let fld_ref = schema.get_field("he_ref").ok()?;
     let qp = QueryParser::for_index(&index, vec![fld_ref]);
+    Some(TantivyHandle { searcher, qp, fld_id })
+}
+
+fn tantivy_search_with(handle: &TantivyHandle, variant: &str, limit: usize, fuzzy: bool) -> Vec<i64> {
     // הערה: לא דורשים AND בין כל המילים (ברירת המחדל OR נשארת) - נסיון
     // קודם לדרוש AND כאן גרם לרגרסיה חמורה: כאשר he_ref מכיל רק את מספר
     // הדף/פרק (ללא שם המסכת, שנשמר בשדה נפרד book_title), שאילתת AND
@@ -1511,12 +1530,12 @@ pub fn tantivy_search(db_path: &str, variant: &str, limit: usize, fuzzy: bool) -
     };
 
     for q_str in &queries {
-        let Ok(q) = qp.parse_query(q_str) else { continue; };
-        let Ok(top) = searcher.search(&q, &TopDocs::with_limit(limit)) else { continue; };
+        let Ok(q) = handle.qp.parse_query(q_str) else { continue; };
+        let Ok(top) = handle.searcher.search(&q, &TopDocs::with_limit(limit)) else { continue; };
         if top.is_empty() { continue; }
         return top.into_iter().filter_map(|(_, addr)| {
-            let doc: TantivyDocument = searcher.doc(addr).ok()?;
-            doc.get_first(fld_id).and_then(|v| TantivyValue::as_u64(&v)).map(|v| v as i64)
+            let doc: TantivyDocument = handle.searcher.doc(addr).ok()?;
+            doc.get_first(handle.fld_id).and_then(|v| TantivyValue::as_u64(&v)).map(|v| v as i64)
         }).collect();
     }
     vec![]
@@ -2089,6 +2108,10 @@ fn scan_chunk(
         .prepare(if opendb.fts { &fts_sql } else { &like_sql })
         .map_err(|e| e.to_string())?;
 
+    // ⚡ perf קריטי: נפתח פעם אחת לכל thread (לא בכל הפניה/וריאנט) —
+    // ראו הערה מפורטת ב-TantivyHandle. None אם אין index (fallback ל-SQL).
+    let tantivy_handle = open_tantivy_handle(db_path);
+
     let mut local_out: Vec<(usize, ResultOut)> = Vec::with_capacity(chunk.len());
     let mut local_not_found: Vec<usize> = Vec::new();
     let mut aborted = false;
@@ -2120,9 +2143,9 @@ fn scan_chunk(
         // כאן: עוצרים אחרי כל תוצאה ראשונה (מהיר), אך ה-exact-batch רץ
         // תמיד בנפרד כרשת ביטחון כשעדיין אין exact מאומת.
         const TANTIVY_VARIANT_TRY_LIMIT: usize = 8;
-        if tantivy_index_exists(db_path) {
+        if let Some(handle) = tantivy_handle.as_ref() {
             for v in variants.iter().take(TANTIVY_VARIANT_TRY_LIMIT) {
-                let ids = tantivy_search(db_path, v, MAX_RESULTS_PER_REF as usize, false);
+                let ids = tantivy_search_with(handle, v, MAX_RESULTS_PER_REF as usize, false);
                 if ids.is_empty() {
                     continue;
                 }
