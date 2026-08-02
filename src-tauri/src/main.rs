@@ -1759,6 +1759,56 @@ fn collect_batch(
     Ok(())
 }
 
+fn collect_rows_for_ids<F>(
+    conn: &Connection,
+    schema: &DbSchema,
+    ids: &[i64],
+    seen: &mut HashSet<i64>,
+    out: &mut Vec<RowOut>,
+    mut classify_row: F,
+) -> rusqlite::Result<()>
+where
+    F: FnMut(&RawRow) -> String,
+{
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let prefix = select_prefix(schema);
+    let placeholders = (0..ids.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!("{prefix}l.id IN ({placeholders}) LIMIT ?");
+
+    use rusqlite::types::ToSql;
+    let mut params_vec: Vec<Box<dyn ToSql>> = ids
+        .iter()
+        .map(|id| -> Box<dyn ToSql> { Box::new(*id) })
+        .collect();
+    params_vec.push(Box::new(MAX_RESULTS_PER_REF));
+    let params_refs: Vec<&dyn ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map(params_refs.as_slice(), map_raw)?;
+    for row in rows {
+        let raw = row?;
+        let match_type = classify_row(&raw);
+        if seen.insert(raw.line_id) {
+            out.push(RowOut {
+                he_ref:       raw.he_ref,
+                book_title:   raw.book_title,
+                file_path:    raw.book_path,
+                line_index:   Some(raw.line_index),
+                line_id:      Some(raw.line_id),
+                content:      strip_tags(&raw.content),
+                match_type,
+                sefaria_url:  None,
+                book_id:      Some(raw.book_id),
+                toc_entry_id: raw.toc_entry_id,
+                char_count:   raw.char_count,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// collect עם statement מוכן מראש (לשאילתות prefix/fuzzy החוזרות).
 fn collect_single_stmt(
     stmt: &mut rusqlite::Statement,
@@ -2162,8 +2212,8 @@ fn scan_chunk(
         // (2) דילוג על בדיקת ה-SQL המדויקת (כי "כבר נעשה שימוש ב-Tantivy")
         //     גם כאשר Tantivy מצא רק fuzzy - כך התאמה מדויקת אמיתית
         //     שהייתה ניתנת לאיתור פשוט לא נבדקה כלל.
-        // כאן: עוצרים אחרי כל תוצאה ראשונה (מהיר), אך ה-exact-batch רץ
-        // תמיד בנפרד כרשת ביטחון כשעדיין אין exact מאומת.
+        // כאן: עוצרים אחרי הוריאנט הראשון שהניב תוצאה כלשהי (מהיר), אך
+        // exact-batch SQL עדיין רץ בנפרד כרשת ביטחון כשעדיין אין exact מאומת.
         const TANTIVY_VARIANT_TRY_LIMIT: usize = 8;
         if let Some(handle) = tantivy_handle.as_ref() {
             for v in variants.iter().take(TANTIVY_VARIANT_TRY_LIMIT) {
@@ -2171,42 +2221,27 @@ fn scan_chunk(
                 if ids.is_empty() {
                     continue;
                 }
+
                 let v_norm = loose_normalize_for_compare(v);
-                for id in ids {
-                    if seen.insert(id) {
-                        let row_sql = format!("{base}l.id = ? LIMIT ?");
-                        if let Ok(mut st) = opendb.conn.prepare(&row_sql) {
-                            let rows = st.query_map(params![id, 1i64], map_raw).ok();
-                            if let Some(rows) = rows {
-                                for row in rows.flatten() {
-                                    // קריטי: Tantivy עשוי להחזיר תוצאה דרך שאילתת
-                                    // prefix/OR רופפת (למשל התאמת מילים בודדות) שאינה
-                                    // באמת זהה להפניה המבוקשת. מתייגים "exact" רק אם
-                                    // ה-he_ref שנמצא זהה בפועל לוריאנט (אחרי נרמול קל
-                                    // של רווחים/פיסוק) — אחרת "fuzzy", כדי לא להציג
-                                    // בטעות הפניה שונה (למשל פרק/משנה הפוכים) כמדויקת.
-                                    let row_norm = loose_normalize_for_compare(&row.he_ref);
-                                    let mt = if row_norm == v_norm { "exact" } else { "fuzzy" };
-                                    out.push(RowOut {
-                                        he_ref:       row.he_ref,
-                                        book_title:   row.book_title,
-                                        file_path:    row.book_path,
-                                        line_index:   Some(row.line_index),
-                                        line_id:      Some(row.line_id),
-                                        content:      strip_tags(&row.content),
-                                        match_type:   mt.to_string(),
-                                        sefaria_url:  None,
-                                        book_id:      Some(row.book_id),
-                                        toc_entry_id: row.toc_entry_id,
-                                        char_count:   row.char_count,
-                                    });
-                                    if mt == "exact" {
-                                        has_exact = true;
-                                    }
-                                }
-                            }
+                let mut tantivy_exact_found = false;
+                let _ = collect_rows_for_ids(
+                    &opendb.conn,
+                    s,
+                    &ids,
+                    &mut seen,
+                    &mut out,
+                    |raw| {
+                        let row_norm = loose_normalize_for_compare(&raw.he_ref);
+                        if row_norm == v_norm {
+                            tantivy_exact_found = true;
+                            "exact".to_string()
+                        } else {
+                            "fuzzy".to_string()
                         }
-                    }
+                    },
+                );
+                if tantivy_exact_found {
+                    has_exact = true;
                 }
                 // עצירה אחרי הוריאנט הראשון שהניב תוצאה כלשהי (מהירות) —
                 // אבל exact-batch SQL עדיין ירוץ בנפרד למטה כרשת ביטחון.
@@ -3243,6 +3278,46 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn collect_rows_for_ids_fetches_multiple_line_ids_in_one_query() {
+        let db_path = std::env::temp_dir().join(format!("bodek_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE book (id INTEGER PRIMARY KEY, title TEXT);
+            CREATE TABLE line (id INTEGER PRIMARY KEY, lineIndex INTEGER, heRef TEXT, content TEXT, bookId INTEGER);
+            INSERT INTO book (id, title) VALUES (1, 'ברכות');
+            INSERT INTO line (id, lineIndex, heRef, content, bookId) VALUES
+                (10, 1, 'ברכות ב', 'א', 1),
+                (11, 2, 'ברכות ג', 'ב', 1),
+                (12, 3, 'ברכות ד', 'ג', 1);
+            "#,
+        ).unwrap();
+
+        let schema = DbSchema {
+            he_ref: "heRef".to_string(),
+            line_index: "lineIndex".to_string(),
+            content: "content".to_string(),
+            book_id: "bookId".to_string(),
+            title: "title".to_string(),
+            file_path: String::new(),
+            toc_entry_id: String::new(),
+            char_count: String::new(),
+        };
+
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        collect_rows_for_ids(&conn, &schema, &[10, 12], &mut seen, &mut out, |_| "exact".to_string()).unwrap();
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].line_id, Some(10));
+        assert_eq!(out[1].line_id, Some(12));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
 
     // ── hebrew_to_number: גימטריה בסיסית + הסרת גרשיים ──────────────────
     #[test]
