@@ -664,7 +664,47 @@ body::before {
 .view-btn:hover  { background: var(--gold-dim); color: var(--text-2); }
 .view-btn.active { background: var(--gold-dim); color: var(--gold); }
 
-/* ── Export ─────────────────────────────────────────── */
+/* ── Verification / Export ─────────────────────────── */
+.verify-all-btn,
+.verify-ref-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--gold-border);
+    background: var(--gold-dim);
+    color: var(--gold-light);
+    font-family: 'Heebo', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--ease);
+}
+.verify-all-btn:hover,
+.verify-ref-btn:hover { background: rgba(201,168,76,0.24); }
+.verify-all-btn { margin-right: 4px; }
+.verify-ref-btn { margin-right: 6px; }
+
+.verified-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(92,184,138,0.16);
+    color: var(--green);
+    border: 1px solid rgba(92,184,138,0.25);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.verified-card {
+    border-color: rgba(92,184,138,0.35);
+    box-shadow: 0 0 0 1px rgba(92,184,138,0.12), 0 8px 30px rgba(92,184,138,0.12);
+}
+
 .export-wrap { position: relative; }
 
 .export-btn {

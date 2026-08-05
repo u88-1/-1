@@ -1,3 +1,5 @@
+import { loadVerifiedRefs, saveVerifiedRefs, toggleVerification, verifyItems, isItemVerified } from './verification.js';
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
@@ -381,6 +383,7 @@ let currentDbPath='',activeJobId=null,isRunning=false;
 let streamStats={total:0,processed:0,found:0,notFound:0};
 // חיפוש בתוצאות עצמן
 let contentSearchQuery='';
+let verifiedRefs = loadVerifiedRefs();
 
 const inputFileEl=document.getElementById('inputFile');
 const dbPathEl=document.getElementById('dbPath');
@@ -617,11 +620,14 @@ function buildCompareCard(item,idx){
     const confMeta=confidenceMeta(confidence);
     const confBadge=`<span class="conf-badge ${confMeta.cls}" title="ציון ביטחון: ${confMeta.label}">🎯 ${confMeta.label}</span>`;
     const sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
+    const verified=isItemVerified(verifiedRefs,item);
+    const verifyBtn=`<button class="verify-ref-btn" data-action="verify-item" data-item-key="${esc(getVerificationKey(item))}" title="${verified?'בטל אימות':'אמת מקור זה'}">${verified?'$ ✓':'$'}</button>`;
+    const verifiedBadge=verified?`<span class="verified-badge" title="מאומת">$ אומת</span>`:'';
 
     if(!item.rows?.length){
         return`<div class="ccard ccard-missing" id="card-${idx}">
             <div class="ccard-ref-row">
-                <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}${confBadge}
+                <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}${confBadge}${verifiedBadge}${verifyBtn}
             </div>
             <div class="ccard-cols">
                 <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
@@ -686,10 +692,10 @@ function buildCompareCard(item,idx){
     const extraBtn=extraCount>0?`<button class="extra-results-btn" data-action="toggle-extra" data-card-idx="${idx}" data-extra-count="${extraCount}">▶ עוד ${extraCount} תוצאות</button>`:'';
     const occurrenceBadge=item.occurrenceCount>1?`<span class="multi-count" title="הופיעה ${item.occurrenceCount} פעמים בטקסט">🔁 ${item.occurrenceCount} פעמים</span>`:'';
 
-    return`<div class="ccard" id="card-${idx}">
+    return`<div class="ccard${verified?' verified-card':''}" id="card-${idx}">
         <div class="ccard-ref-row">
             <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>
-            <div class="ccard-badges">${badge}${confBadge}${occurrenceBadge}${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}</div>
+            <div class="ccard-badges">${badge}${confBadge}${occurrenceBadge}${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}${verifiedBadge}${verifyBtn}</div>
         </div>
         <div class="ccard-cols">
             <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
@@ -786,6 +792,7 @@ function renderToolbar(r){
                     <button data-action="export" data-format="json">JSON</button>
                 </div>
             </div>
+            <button class="verify-all-btn" id="verifyAllBtn" title="אמת את כל התוצאות הנוכחיות">$ אמת את כל התוצאות</button>
         </div>`;
     document.getElementById('resultsToolbar')?.remove();
     resultArea.before(toolbar);
@@ -812,6 +819,12 @@ function renderToolbar(r){
         e.stopPropagation();
         const m=document.getElementById('exportMenu');
         m.style.display=m.style.display==='none'?'':'none';
+    });
+    document.getElementById('verifyAllBtn')?.addEventListener('click',()=>{
+        const visible = getFilteredResults();
+        verifiedRefs = verifyItems(verifiedRefs, visible);
+        saveVerifiedRefs(verifiedRefs);
+        renderResults();
     });
     document.addEventListener('click',()=>{const m=document.getElementById('exportMenu');if(m)m.style.display='none';});
 }
@@ -1176,6 +1189,14 @@ document.addEventListener('click',(e)=>{
         if(area)area.style.display='none';
         const expandBtn=el.closest('.db-match,.db-match-extra')?.querySelector('.expand-page-btn');
         if(expandBtn)expandBtn.textContent='📖 הרחב לדף מלא';
+
+    }else if(action==='verify-item'){
+        const key=el.dataset.itemKey||'';
+        const item = sortedCache.find(x => getVerificationKey(x) === key);
+        if(!item)return;
+        verifiedRefs = toggleVerification(verifiedRefs, item);
+        saveVerifiedRefs(verifiedRefs);
+        renderResults();
 
     }else if(action==='copy-citation'){
         // העתק ציטוט מעוצב: "שם הפניה (ספר, he_ref): תוכן..."
