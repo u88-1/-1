@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>בודק מקורות</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;700;900&family=Heebo:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-mark">📖</div>
+            <div class="brand-name">בודק <span>מקורות</span></div>
+        </div>
+        <nav class="nav">
+            <a class="nav-link active" href="#" data-page="compare">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h14M3 10h14M3 14h8" stroke-linecap="round"/></svg>
+                השוואת מקורות
+            </a>
+            <a class="nav-link" href="#" data-page="history">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2" stroke-linecap="round"/></svg>
+                היסטוריה
+            </a>
+            <a class="nav-link" href="#" data-page="biblio">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.5"/><circle cx="14" cy="6" r="2.5"/><circle cx="10" cy="15" r="2.5"/><path d="M8 7.5L9 13M12 7.5L11 13" stroke-linecap="round"/></svg>
+                ניתוח ביבליוגרפי
+            </a>
+            <a class="nav-link" href="#" data-page="aieditor">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h9l3 3v9H4z"/><path d="M7 8h6M7 11h6M7 14h3" stroke-linecap="round"/></svg>
+                עורך AI — פיסוק ומקורות
+            </a>
+            <a class="nav-link" href="#" data-page="summarizer">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5h12M4 10h12M4 15h7" stroke-linecap="round"/></svg>
+                מסכם טקסט חכם
+            </a>
+            <a class="nav-link" href="#" data-page="about">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 7v.5" stroke-linecap="round"/></svg>
+                אודות
+            </a>
+            <a class="nav-link" href="#" data-page="settings">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4" stroke-linecap="round"/></svg>
+                הגדרות
+            </a>
+        </nav>
+        <div class="sidebar-bottom">v4.4.3 · U88-1 · Tauri</div>
+    </aside>
+
+    <main class="main">
+        <!-- ══ PAGE: השוואת מקורות ══ -->
+        <div id="page-compare" class="page">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">בודק <span>מקורות</span></h1>
+                    <p class="page-sub">בדיקת הפניות בקבצי טקסט, Word ו-PDF מול מסד הנתונים ו-Sefaria</p>
+                    <div class="gold-line"></div>
+                </div>
+                <div id="timerBox" class="timer" style="display:none">
+                    <span class="timer-label">זמן עיבוד</span>
+                    <span id="timer" class="timer-val">0.0s</span>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🗂️</div>הגדרות קובץ</div>
+                <div class="fields">
+                    <div class="field">
+                        <label class="field-label" for="inputFile">קובץ לבדיקה <span class="tag-opt">.txt / .docx / .pdf</span></label>
+                        <div class="field-wrap">
+                            <input id="inputFile" type="text" class="field-input" placeholder="C:\Users\...\חיי שרה.txt" />
+                            <button class="browse-btn" data-action="browse" data-type="txt" title="בחר קובץ">📂</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="dbPath">מסד נתונים <span class="tag-opt">אופציונלי</span></label>
+                        <div class="field-wrap">
+                            <input id="dbPath" type="text" class="field-input" placeholder="C:\ProgramData\otzariaooks\seforim.db" />
+                            <button class="browse-btn" data-action="browse" data-type="db" title="בחר מסד נתונים">📂</button>
+                            <button class="build-index-btn" id="buildIndexBtn" title="בנה אינדקס חיפוש מהיר (פעולה חד-פעמית)">⚡ בנה אינדקס</button>
+                        </div>
+                        <div id="indexStatus" class="index-status" style="display:none"></div>
+                    </div>
+                </div>
+                <div class="bracket-row">
+                    <span class="field-label" style="margin-left:12px">סוג סוגריים:</span>
+                    <div class="bracket-opts">
+                        <label class="bracket-opt"><input type="radio" name="brackets" value="curly" checked /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
+                        <label class="bracket-opt"><input type="radio" name="brackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
+                        <label class="bracket-opt"><input type="radio" name="brackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
+                    </div>
+                    <span id="bracketsAutoHint" class="field-hint" style="margin:0 8px"></span>
+                </div>
+                <button id="runButton" class="run-btn">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                    השווה מקורות
+                </button>
+            </section>
+
+            <!-- אימות טקסט קצר ללא קובץ -->
+            <section class="panel" id="pasteVerifyPanel">
+                <div class="panel-title" id="pasteVerifyToggle" style="cursor:pointer;user-select:none">
+                    <div class="panel-icon">📋</div>אימות טקסט מהיר
+                    <span class="paste-toggle-hint">לחץ להרחבה ▼</span>
+                </div>
+                <div id="pasteVerifyBody" style="display:none">
+                    <p class="field-hint" style="margin-bottom:8px">הדבק כאן טקסט עם הפניות לאימות מיידי — ללא קובץ מצורף</p>
+                    <textarea id="pasteTextArea" class="paste-textarea" placeholder="הדבק טקסט כאן...&#10;לדוגמה: כתב הרמב&quot;ם {שבת ז, א} שיש לשמור..."></textarea>
+                    <button class="run-btn" id="runPasteBtn" style="margin-top:8px">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                        בדוק טקסט מהדבקה
+                    </button>
+                </div>
+            </section>
+
+            <div id="status" class="status-bar">מוכן.</div>
+            <div id="summary" style="display:none"></div>
+            <div id="resultArea"></div>
+        </div>
+
+        <!-- ══ PAGE: היסטוריה ══ -->
+        <div id="page-history" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div><h1 class="page-title">היסטוריה</h1><p class="page-sub">הרצות קודמות שנשמרו במכשיר זה</p></div>
+                <button class="run-btn" id="clearHistoryBtn" style="background:rgba(248,113,113,0.15);color:var(--red);border:1px solid rgba(248,113,113,0.25);">🗑 נקה היסטוריה</button>
+            </header>
+            <div id="historyList"></div>
+        </div>
+
+        <!-- ══ PAGE: ניתוח ביבליוגרפי ══ -->
+        <div id="page-biblio" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">ניתוח <span>ביבליוגרפי</span></h1>
+                    <p class="page-sub">סטטיסטיקת מקורות, ענן ציטוטים וקשרים בין מקורות — עם איחוד אוטומטי של כתיבים שונים לאותו מקור</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📚</div>טקסט לניתוח</div>
+                <div class="fields" style="grid-template-columns:1fr;margin-bottom:10px">
+                    <div class="field">
+                        <label class="field-label" for="biblioFile">טעינת קובץ טקסט <span class="tag-opt">.txt</span></label>
+                        <div class="field-wrap">
+                            <input type="file" id="biblioFileInput" accept=".txt" style="display:none" />
+                            <input id="biblioFile" type="text" class="field-input" placeholder="לא נבחר קובץ — אפשר גם להדביק טקסט ישירות למטה" readonly />
+                            <button class="browse-btn" data-action="biblio-browse" title="בחר קובץ טקסט">📂</button>
+                        </div>
+                        <p class="field-hint">לקבצי Word/PDF: הרץ אותם קודם ב"השוואת מקורות", ואז הדבק את הטקסט כאן.</p>
+                    </div>
+                </div>
+                <textarea id="biblioText" class="paste-textarea" style="min-height:160px" placeholder="הדבק כאן טקסט עם הפניות בסוגריים, למשל: כתב הרמב&quot;ם {שבת ז, א} וכן {ברכות ב.} ...&#10;&#10;טיפ: הוסף שורה ריקה בין פסקאות, וציין 'פרק X' / 'סימן X' כדי שהמערכת תעקוב אחרי מיקום כל מקור במבנה הספר."></textarea>
+                <div class="bracket-row">
+                    <span class="field-label" style="margin-left:12px">סוג סוגריים:</span>
+                    <div class="bracket-opts">
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="curly" checked /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
+                    </div>
+                    <span id="biblioBracketsAutoHint" class="field-hint" style="margin:0 8px"></span>
+                </div>
+                <button id="biblioRunBtn" class="run-btn">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                    הפעל ניתוח ביבליוגרפי
+                </button>
+            </section>
+
+            <div id="biblioStatus" class="status-bar" style="display:none"></div>
+
+            <div id="biblioResults" style="display:none">
+                <div class="summary-grid" id="biblioKpis" style="margin-bottom:16px"></div>
+
+                <section class="panel">
+                    <div class="panel-title" style="justify-content:space-between;display:flex;align-items:center">
+                        <div style="display:flex;align-items:center;gap:10px"><div class="panel-icon">📊</div>תוצאות הניתוח</div>
+                        <div style="display:flex;gap:8px">
+                            <button class="browse-btn" id="biblioVerifyBtn" title="בדוק מול מסד הנתונים בפועל אילו מקורות אכן קיימים">🔍 אימות מול המאגר</button>
+                            <button class="browse-btn" id="biblioDownloadCsv" title="הורד טבלת מקורות כ-CSV">⬇️ CSV</button>
+                            <button class="browse-btn" id="biblioDownloadTxt" title="הורד את הטקסט (לאחר תיקוני שם אם בוצעו)">💾 טקסט מתוקן</button>
+                        </div>
+                    </div>
+                    <div class="bracket-opts" style="margin-bottom:14px">
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="stats" checked /><span class="bracket-btn">📋</span>סטטיסטיקה</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="cloud" /><span class="bracket-btn">☁️</span>ענן מקורות</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="relations" /><span class="bracket-btn">🔗</span>קשרים</label>
+                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="chapters" /><span class="bracket-btn">📖</span>פילוח לפי פרק</label>
+                    </div>
+
+                    <div id="biblioTabStats" class="biblio-tab-view">
+                        <div class="biblio-toolbar">
+                            <input id="biblioFilterInput" type="text" class="field-input" placeholder="🔍 סנן לפי שם מקור..." style="max-width:220px" />
+                            <select id="biblioSortSelect" class="field-input" style="max-width:170px">
+                                <option value="count-desc">מיון: הכי הרבה מופעים</option>
+                                <option value="count-asc">מיון: הכי מעט מופעים</option>
+                                <option value="name">מיון: אלפביתי</option>
+                            </select>
+                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyUnrecognized" /> רק לא-מזוהים</label>
+                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyNotInDb" /> רק לא-במאגר</label>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr>
+                                    <th>מקור (לחץ ✏️ לתיקון גלובלי בכל הצורות שנמצאו)</th>
+                                    <th style="width:70px">מופעים</th>
+                                    <th style="width:160px">מיקומים</th>
+                                    <th style="width:110px">אימות</th>
+                                </tr></thead>
+                                <tbody id="biblioStatsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="biblioTabCloud" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">לחיצה על מקור בענן תפתח אותו בטבלת הסטטיסטיקה:</p>
+                        <div class="cloud-box" id="biblioCloud"></div>
+                    </div>
+
+                    <div id="biblioTabRelations" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">מקורות (לאחר איחוד וריאציות) שנוטים להופיע יחד באותה פסקה:</p>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr><th>מקור א׳</th><th>מקור ב׳</th><th style="width:120px">הופעות משותפות</th></tr></thead>
+                                <tbody id="biblioRelationsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="biblioTabChapters" class="biblio-tab-view" style="display:none">
+                        <p class="field-hint" style="margin-bottom:10px">כמות ציטוטים לפי מיקום במסמך — עוזר לאתר פרקים עם צפיפות ציטוטים חריגה:</p>
+                        <div id="biblioChaptersBox"></div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- ══ PAGE: עורך AI — פיסוק ומקורות ══ -->
+        <div id="page-aieditor" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">עורך <span>AI</span> — פיסוק ומקורות</h1>
+                    <p class="page-sub">פיסוק אוטומטי, איתור מראי מקומות ופתיחת ראשי תיבות באמצעות Gemini, עם השוואה חזותית מול המקור</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🔑</div>חיבור ל-Gemini</div>
+                <div class="fields" style="grid-template-columns:2fr 1fr">
+                    <div class="field">
+                        <label class="field-label" for="aiApiKey">מפתח API</label>
+                        <input type="password" id="aiApiKey" class="field-input" placeholder="הדבק כאן את מפתח ה-Gemini API שלך" style="direction:ltr;font-family:monospace" />
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="aiModelSelect">מודל</label>
+                        <select id="aiModelSelect" class="field-input">
+                            <option value="gemini-flash-latest">Gemini 1.5 Flash (הכי יציב)</option>
+                            <option value="gemini-1.5-flash">Gemini 1.5 Flash (חלופי)</option>
+                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (חדש)</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <button class="biblio-mini-btn" id="aiBtnEditInstruction">⚙️ הנחיה מותאמת אישית</button>
+                    <span id="aiInstructionHint" class="field-hint" style="margin:0"></span>
+                </div>
+                <p class="field-hint">המפתח נשאר בזיכרון המקומי בלבד ואינו נשמר או נשלח לשום מקום מלבד Google.</p>
+            </section>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📝</div>טקסטים</div>
+                <div class="fields" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+                    <div class="field">
+                        <label class="field-label">טקסט מקורי</label>
+                        <textarea id="aiTextA" class="paste-textarea" style="min-height:180px" placeholder="הדבק כאן את הטקסט המקורי שלך..."></textarea>
+                    </div>
+                    <div class="field">
+                        <label class="field-label">תוצאת ה-AI</label>
+                        <textarea id="aiTextB" class="paste-textarea" style="min-height:180px" placeholder="תוצאת ה-AI תופיע כאן — ניתן גם להדביק ידנית..."></textarea>
+                    </div>
+                </div>
+
+                <div id="aiStatus" class="status-bar" style="display:none"></div>
+
+                <div style="display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:6px">
+                    <button id="aiBtnRun" class="run-btn" style="max-width:260px">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+                        שלב א׳ — איתור מקורות ופיסוק
+                    </button>
+                    <button id="aiBtnCompare" class="run-btn" style="max-width:220px;background:var(--teal, var(--gold))">
+                        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
+                        שלב ב׳ — השוואה ומיזוג
+                    </button>
+                    <button id="aiBtnSave" class="run-btn" style="max-width:180px;background:var(--green,var(--gold))">
+                        💾 שמור תוצאה
+                    </button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🔬</div>השוואה ותצוגה</div>
+                <p class="field-hint" style="margin-bottom:10px">לחיצה על מילה מודגשת (נוספה / מקור בסוגריים) מסתירה אותה מהתוצאה הסופית — לחיצה נוספת מחזירה אותה.</p>
+                <div class="ai-columns-wrapper">
+                    <div class="ai-column">
+                        <div class="ai-column-title">חלונית עריכה</div>
+                        <div id="aiDiffContainer" class="ai-scroll-area"></div>
+                    </div>
+                    <div class="ai-column">
+                        <div class="ai-column-title">תוצאה סופית</div>
+                        <div id="aiPreviewContainer" class="ai-scroll-area"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ══ PAGE: מסכם טקסט חכם ══ -->
+        <div id="page-summarizer" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">מסכם <span>טקסט</span> חכם</h1>
+                    <p class="page-sub">נושאים עיקריים, שמות ומקורות, וסיכום בסגנון ישיבתי-ליטאי — עם אפשרות לשאול שאלות על הטקסט</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">🔑</div>חיבור ל-Gemini</div>
+                <div class="fields" style="grid-template-columns:2fr 1fr">
+                    <div class="field">
+                        <label class="field-label" for="sumApiKey">מפתח API</label>
+                        <input type="password" id="sumApiKey" class="field-input" placeholder="הדבק כאן את מפתח ה-Gemini API שלך" style="direction:ltr;font-family:monospace" />
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="sumModelSelect">מודל</label>
+                        <select id="sumModelSelect" class="field-input">
+                            <option value="gemini-flash-latest">Gemini 1.5 Flash (הכי יציב)</option>
+                            <option value="gemini-1.5-flash">Gemini 1.5 Flash (חלופי)</option>
+                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (חדש)</option>
+                        </select>
+                    </div>
+                </div>
+                <p class="field-hint">המפתח משותף עם עורך ה-AI, ונשמר מוצפן באחסון המאובטח של המערכת — לא צריך להזין אותו פעמיים.</p>
+            </section>
+
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📝</div>טקסט לסיכום</div>
+                <textarea id="sumInputText" class="paste-textarea" style="min-height:200px" placeholder="הדבק כאן את הטקסט שברצונך לסכם..."></textarea>
+                <p class="field-hint" id="sumCharCount">0 תווים</p>
+                <div id="sumErrorBox" class="status-bar error" style="display:none;white-space:pre-wrap"></div>
+                <button id="sumBtnRun" class="run-btn" style="margin-top:10px">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+                    סכם את הטקסט
+                </button>
+            </section>
+
+            <section class="panel biblio-tab-view" id="sumTopicsCard" style="display:none">
+                <div class="panel-title"><div class="panel-icon">📋</div>נושאים עיקריים</div>
+                <ol class="sum-topics-list" id="sumTopicsList"></ol>
+            </section>
+
+            <section class="panel biblio-tab-view" id="sumNamesCard" style="display:none">
+                <div class="panel-title"><div class="panel-icon">🏷️</div>שמות ומקורות</div>
+                <div class="sum-tags-legend">
+                    <span class="sum-legend-person">אנשים</span>
+                    <span class="sum-legend-book">ספרים ומקורות</span>
+                    <span class="sum-legend-place">מקומות</span>
+                </div>
+                <div class="sum-tags-wrap" id="sumNamesTags"></div>
+            </section>
+
+            <section class="panel biblio-tab-view" id="sumSummaryCard" style="display:none">
+                <div class="panel-title"><div class="panel-icon">📜</div>סיכום</div>
+                <div id="sumSummaryText" class="sum-summary-text"></div>
+                <div id="sumTokenInfo"></div>
+                <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+                    <button class="biblio-mini-btn primary" id="sumBtnCopy">העתק סיכום</button>
+                    <button class="biblio-mini-btn" id="sumBtnClear">נקה הכל</button>
+                </div>
+            </section>
+
+            <section class="panel biblio-tab-view" id="sumQaCard" style="display:none">
+                <div class="panel-title"><div class="panel-icon">💬</div>שאלות על הטקסט</div>
+                <div class="fields" style="grid-template-columns:1fr auto">
+                    <input type="text" id="sumQaInput" class="field-input" placeholder="שאל שאלה על הטקסט..." />
+                    <button class="run-btn" id="sumBtnAsk" style="max-width:120px">שאל</button>
+                </div>
+                <div id="sumQaAnswer" class="ai-scroll-area" style="display:none;min-height:60px;margin-top:12px"></div>
+            </section>
+        </div>
+
+        <!-- ══ PAGE: אודות ══ -->
+        <div id="page-about" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div><div class="header-ornament">✦ ✡ ✦</div><h1 class="page-title">אודות <span>בודק מקורות</span></h1><div class="gold-line"></div></div>
+            </header>
+            <section class="panel about-panel">
+                <div class="about-logo">📖</div>
+                <div class="about-title">בודק מקורות</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.4.3 · U88-1 · Tauri</div>
+                <div class="about-desc">
+                    <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
+                    <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
+                    <p>פותח על ידי: <strong>U88-1</strong></p>
+                </div>
+                <!-- שינויי גרסאות -->
+                <div class="changelog-section">
+                    <div class="changelog-title">📋 שינויי גרסאות</div>
+                    <div class="changelog-list" id="changelogList">
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.3 — נוכחי</div>
+                            <ul>
+                                <li>תיקון: מפתח Gemini לא תמיד נשמר (הוחלף לשמירה על כל הקלדה + רשת ביטחון לפני הרצה)</li>
+                                <li>תיקון: זיהוי "חלק"/"פרק" תפס בטעות ביטויים רגילים כמו "חלק לעולם הבא"</li>
+                                <li>אישור ויזואלי כשזוהה סוג סוגריים אוטומטית</li>
+                                <li>יומן שינויים מלא וגלילה בעמוד אודות</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.2</div>
+                            <ul>
+                                <li>Timeout של 90 שניות לקריאות Gemini — מונע תקיעה שקטה ללא הודעה</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.1</div>
+                            <ul>
+                                <li>תיקון API של keyring שגרם לכשל build</li>
+                                <li>הנחיה מותאמת אישית בעורך ה-AI (למשל "הוסף ניקוד") — מצטרפת להנחיה הבסיסית, נשמרת בין הפעלות</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.0</div>
+                            <ul>
+                                <li>טאב חדש: מסכם טקסט חכם — נושאים, שמות/מקורות, סיכום בסגנון ישיבתי, שאלות-תשובה</li>
+                                <li>מפתח Gemini נשמר מוצפן ב-Credential Manager, לא בטקסט גלוי</li>
+                                <li>זיהוי "פסקה X" כמיקום בניתוח ביבליוגרפי</li>
+                                <li>זיהוי אוטומטי של סוג סוגריים בעת הדבקת טקסט</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.3.0 – v4.3.3</div>
+                            <ul>
+                                <li>טאב חדש: עורך AI — פיסוק ומקורות (Gemini)</li>
+                                <li>קריאות Gemini הועברו לצד Rust — עוקף חסימת CORS ("Failed to fetch")</li>
+                                <li>טיפול בתגובה חסומה/ריקה, מניעת שליחה כפולה</li>
+                                <li>עמודת "אימות" מאוחדת בניתוח ביבליוגרפי — לחיצה פותחת ישירות באוצריא</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.2.9</div>
+                            <ul>
+                                <li>32 בדיקות אוטומטיות (cargo test), רצות ב-CI לפני כל build</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.2.4 – v4.2.8</div>
+                            <ul>
+                                <li>זיהוי דף/עמוד גמרא בכל צורות הכתיב (ע"א/ע"ב, אות בודדת, נקודתיים, גרשיים בתוך מספר הדף)</li>
+                                <li>פורמט he_ref אמיתי אושר מול נתוני ה-DB (אותיות עבריות, לא ספרות)</li>
+                                <li>תמיכה בתלמוד ירושלמי ואימות מקורות מול המאגר בפועל</li>
+                                <li>תיקון קריטי: מיון תוצאות לפי איכות התאמה (מדויק/קידומת/חלקי)</li>
+                                <li>תיקון רקע html מול body במצב יום</li>
+                                <li>ניתוח ביבליוגרפי: חיפוש/סינון/מיון, פילוח לפי פרק</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.6</div>
+                            <ul>
+                                <li>תמיכה בסכמת DB חדשה (tocEntryId, charCount)</li>
+                                <li>תיקון קריסה (panic) בחיפוש קיצורי מסכתות</li>
+                                <li>הגנה על ספרי תנ"ך/שו"ע/רמב"ם מהמרת גימטריה שגויה</li>
+                                <li>תיקון תיוג שגוי (exact) של מנוע Tantivy</li>
+                                <li>טאב חדש: ניתוח ביבליוגרפי (סטטיסטיקה, ענן מקורות, קשרים)</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.1 – v4.1.5</div>
+                            <ul>
+                                <li>הגדלה/הקטנה של גודל הכתב בתוצאות</li>
+                                <li>מצב יום ומצב לילה</li>
+                                <li>תיקון פתח באוצריא — מיקום מדויק</li>
+                                <li>תצוגה מצומצמת לדפים גדולים (2 שורות + הרחב)</li>
+                                <li>חיפוש בתוצאות עצמן, אימות טקסט מהיר (הדבקה ללא קובץ)</li>
+                                <li>הגדרת כמות תוצאות לעמוד (pagination)</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.1.0 — שחרור ראשון Tauri</div>
+                            <ul>
+                                <li>המרה מ-Electron ל-Tauri 2</li>
+                                <li>מנוע ליבה ב-Rust עם SQLite + FTS5</li>
+                                <li>אינדקס Tantivy לחיפוש מהיר</li>
+                                <li>גודל אפליקציה ~8MB (במקום 150MB)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="about-features">
+                    <div class="about-feature"><span class="about-feat-icon">📄</span><div><strong>תמיכה במגוון קבצים</strong><span>טקסט רגיל (.txt), Word (.docx) ו-PDF (חילוץ טקסט)</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">🔍</span><div><strong>חיפוש חכם</strong><span>נרמול מספרים עבריים, פיתוח קיצורי מסכתות, חיפוש מטושטש (FTS5)</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">⚡</span><div><strong>הצגה בזמן אמת</strong><span>כל תוצאה מוצגת ברגע שנמצאת, עם אפשרות לעצור באמצע</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">📊</span><div><strong>השוואה חזותית</strong><span>הציטוט מהמקור לצד הטקסט מהמאגר</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">📖</span><div><strong>הרחבת דף גמרא</strong><span>לש"ס בבלי — אפשרות לפתוח את הדף המלא</span></div></div>
+                    <div class="about-feature"><span class="about-feat-icon">🌐</span><div><strong>Sefaria Fallback</strong><span>מקורות שלא נמצאו במאגר המקומי — נחפשים ב-Sefaria.org</span></div></div>
+                </div>
+                <div class="about-format">
+                    <div class="about-format-title">פורמט הפניות (לפי סוג סוגריים)</div>
+                    <div class="about-format-examples">
+                        <code>{בראשית א, א}</code><code>[קידושין ב, א]</code><code>(שבת לא:)</code><code>{רמב"ם הלכות שבת א, א}</code>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ══ PAGE: הגדרות ══ -->
+        <div id="page-settings" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div><h1 class="page-title">הגדרות</h1><p class="page-sub">התאמה אישית של החיפוש ומסד הנתונים</p></div>
+            </header>
+
+            <section class="panel">
+                <div class="panel-head"><span class="panel-label">מסד נתונים</span></div>
+                <div class="fields" style="grid-template-columns:1fr">
+                    <div class="field">
+                        <label class="field-label" for="settingsDbPath">נתיב ברירת מחדל ל-DB</label>
+                        <div class="field-wrap">
+                            <input id="settingsDbPath" type="text" class="field-input" placeholder="C:\ProgramData\otzariaooks\seforim.db" />
+                            <button class="browse-btn" data-action="browse" data-type="db-settings" title="בחר מסד נתונים">📂</button>
+                        </div>
+                        <p class="field-hint">כאשר שדה ה-DB בדף הראשי ריק, ייעשה שימוש בנתיב זה.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head"><span class="panel-label">אפשרויות חיפוש</span></div>
+                <div class="settings-options">
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">נרמול מספרים עבריים</span><span class="toggle-desc">המרת קיג → 113, כד → 24 וכו׳</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-hebnums" class="toggle-input" checked /><span class="toggle-slider"></span></div>
+                    </label>
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">פיתוח קיצורי מסכתות</span><span class="toggle-desc">ב״ק → בבא קמא, זבח׳ → זבחים וכו׳</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-abbrev" class="toggle-input" checked /><span class="toggle-slider"></span></div>
+                    </label>
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">חיפוש מטושטש (fuzzy)</span><span class="toggle-desc">חיפוש חלקי כאשר התאמה מדויקת וקידומת נכשלות</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-fuzzy" class="toggle-input" checked /><span class="toggle-slider"></span></div>
+                    </label>
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">🌐 חיפוש ב-Sefaria כ-Fallback</span><span class="toggle-desc">אם לא נמצא ב-DB המקומי, חפש אוטומטית ב-Sefaria.org</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-sefaria" class="toggle-input" checked /><span class="toggle-slider"></span></div>
+                    </label>
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">שמור היסטוריה</span><span class="toggle-desc">שמור תוצאות הרצות בזיכרון המכשיר</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-history" class="toggle-input" checked /><span class="toggle-slider"></span></div>
+                    </label>
+                </div>
+            </section>
+
+            <!-- הגדרת תצוגה -->
+            <section class="panel">
+                <div class="panel-head"><span class="panel-label">תצוגה ונגישות</span></div>
+                <div class="settings-options">
+                    <!-- מצב יום/לילה -->
+                    <label class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">☀️ מצב יום</span><span class="toggle-desc">עיצוב בהיר (ברירת מחדל: מצב לילה כהה)</span></div>
+                        <div class="toggle-wrap"><input type="checkbox" id="opt-light-mode" class="toggle-input" /><span class="toggle-slider"></span></div>
+                    </label>
+                    <!-- גודל כתב -->
+                    <div class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">🔤 גודל כתב בתוצאות</span><span class="toggle-desc">התאמת גודל הטקסט בכרטיסי התוצאות</span></div>
+                        <div class="font-size-ctrl">
+                            <button class="font-size-btn" id="fontSizeDown" title="הקטן">A−</button>
+                            <span id="fontSizeVal">100%</span>
+                            <button class="font-size-btn" id="fontSizeUp" title="הגדל">A+</button>
+                        </div>
+                    </div>
+                    <!-- תוצאות לעמוד -->
+                    <div class="toggle-row">
+                        <div class="toggle-info"><span class="toggle-title">📄 תצוגת תוצאות</span><span class="toggle-desc">רציף (גלילה אינסופית) או עמודים</span></div>
+                        <div class="page-size-ctrl">
+                            <select id="opt-page-mode" class="field-input" style="width:auto;padding:4px 8px">
+                                <option value="continuous">רציף</option>
+                                <option value="10">10 לעמוד</option>
+                                <option value="20">20 לעמוד</option>
+                                <option value="50">50 לעמוד</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <button class="run-btn" id="saveSettingsBtn">💾 שמור הגדרות</button>
+            <div id="settingsSaved" class="status-bar ok" style="display:none;margin-top:10px">ההגדרות נשמרו ✓</div>
+        </div>
+    </main>
+</div>
+<script src="main.js"></script>
+</body>
+</html>

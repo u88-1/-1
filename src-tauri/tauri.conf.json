@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "בודק מקורות",
+  "version": "4.4.6",
+  "identifier": "com.bodek-mekorot.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "בודק מקורות",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "backgroundColor": "#1a1208"
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost https://generativelanguage.googleapis.com",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src": "https://fonts.gstatic.com",
+        "img-src": "'self' data:",
+        "object-src": "'none'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "בדיקת הפניות אוטומטית בספרות תורנית",
+    "longDescription": "בדיקת הפניות אוטומטית בספרות תורנית מול מסד הנתונים של אוצריא ו-Sefaria",
+    "copyright": "GPL-3.0",
+    "windows": {
+      "nsis": {
+        "languages": [
+          "Hebrew"
+        ],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "startMenuFolder": "בודק מקורות"
+      }
+    },
+    "publisher": "U88-1"
+  }
+}
