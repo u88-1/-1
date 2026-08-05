@@ -1,4 +1,5 @@
 import { loadVerifiedRefs, saveVerifiedRefs, toggleVerification, verifyItems, isItemVerified } from './verification.js';
+import { normalizeComparePayload, normalizeSummary } from './event-normalizer.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -398,12 +399,15 @@ function getBracketValue(){
 
 // ── אירועים מ-Rust ────────────────────────────────────
 listen('compare-result',ev=>{
-    const p=ev.payload;if(!p||p.jobId!==activeJobId)return;
+    const p=normalizeComparePayload(ev.payload);
+    if(!p||p.jobId!==activeJobId)return;
     handleResultEvent(p);
 });
 listen('compare-done',ev=>{
-    const p=ev.payload;if(!p||p.jobId!==activeJobId)return;
-    onStreamComplete(p.summary||{});
+    const p=normalizeComparePayload(ev.payload);
+    const summary = normalizeSummary((p && p.summary) || ev.payload || {});
+    if(!p||p.jobId!==activeJobId)return;
+    onStreamComplete(summary);
 });
 
 // ── Run ───────────────────────────────────────────────
@@ -445,6 +449,7 @@ function startComparisonFromText(text){
 
     resultArea.innerHTML='<div class="compare-list" id="streamList"></div>';
     streamStats={total:0,processed:0,found:0,notFound:0};
+    setStatus('מתחיל זרם תוצאות...', 'working');
 
     // שולח טקסט ישיר — Rust מקבל inputText במקום inputFile
     invoke('compare_start',{
@@ -487,6 +492,7 @@ function startComparison(){
 
     resultArea.innerHTML='<div class="compare-list" id="streamList"></div>';
     streamStats={total:0,processed:0,found:0,notFound:0};
+    setStatus('מתחיל זרם תוצאות...', 'working');
 
     invoke('compare_start',{
         jobId:activeJobId,
@@ -501,10 +507,12 @@ function startComparison(){
 function handleResultEvent(payload){
     const{idx,result,progress}=payload;
     streamStats={total:progress.total,processed:progress.processed,found:progress.foundCount,notFound:progress.notFoundCount};
-    sortedCache[idx]=result;
+    if (Number.isInteger(idx) && idx >= 0) {
+        sortedCache[idx]=result;
+    }
     setStatus(`מעבד... ${progress.processed}/${progress.total} — נמצאו: ${progress.foundCount} | לא נמצאו: ${progress.notFoundCount}`,'working');
     updateProgressBar(progress.processed,progress.total);
-    upsertCard(idx,result);
+    renderStreamList();
 }
 
 function updateProgressBar(done,total){
@@ -518,20 +526,19 @@ function updateProgressBar(done,total){
     document.getElementById('progressFill').style.width=pct+'%';
 }
 
-function upsertCard(idx,item){
-    const list=document.getElementById('streamList');if(!list)return;
-    const html=buildCompareCard(item,idx);
-    const existing=document.getElementById('card-'+idx);
-    if(existing){
-        const tmp=document.createElement('div');tmp.innerHTML=html;
-        existing.replaceWith(tmp.firstElementChild);
-    }else{
-        const div=document.createElement('div');div.innerHTML=html;
-        const el=div.firstElementChild;
-        list.appendChild(el);
-        // גלילה רק אם המשתמש כבר ליד תחתית הרשימה (לא מגלגלים בכוח)
+function renderStreamList(){
+    const list=document.getElementById('streamList');
+    if(!list)return;
+    const cards=sortedCache.reduce((acc,item,idx)=>{
+        if(!item) return acc;
+        acc.push(buildCompareCard(item,idx));
+        return acc;
+    },[]).join('');
+    list.innerHTML=cards || '<div class="empty-state"><div class="empty-icon">⏳</div><div>מתקבלות תוצאות...</div></div>';
+    if (cards) {
+        const lastCard=list.lastElementChild;
         const distFromBottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
-        if(distFromBottom<300)el?.scrollIntoView({behavior:'smooth',block:'nearest'});
+        if(distFromBottom<300)lastCard?.scrollIntoView({behavior:'smooth',block:'nearest'});
     }
 }
 
