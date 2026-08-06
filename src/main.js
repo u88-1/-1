@@ -655,6 +655,7 @@ function buildCompareCard(item,idx){
         const expandBtn=item.isBavli&&row.lineId?`<button class="expand-page-btn" data-action="expand-page" data-line-id="${row.lineId}" data-he-ref="${esc(row.heRef)}">📖 דף מלא</button>`:'';
         const otzariaBtn=row.lineId&&row.bookTitle?`<button class="otzaria-open-btn" data-action="open-in-otzaria" data-book-title="${esc(row.bookTitle)}" data-line-index="${row.lineIndex??0}" data-book-id="${row.bookId??''}" title="פתח ישירות באוצריא">📚 אוצריא</button>`:'';
         const copyBtn=`<button class="copy-citation-btn" data-action="copy-citation" data-ref="${esc(item.ref)}" data-book="${esc(row.bookTitle)}" data-heref="${esc(row.heRef)}" data-content="${esc((rawContent||'').substring(0,200))}" title="העתק ציטוט">📋</button>`;
+        const verifyBtn=ri===0?`<button class="verify-ref-btn ${item._verified?'verified':''}" data-action="verify-ref" data-ref="${esc(item.ref)}" data-card-idx="${idx}" title="${item._verified?'מאומת ✓ — לחץ לביטול':'אמת הפניה זו במסמך המקורי'}">✓</button>`:'';
         const typeLabel={exact:'מדויק',prefix:'קידומת',fuzzy:'חלקי',sefaria:'Sefaria'}[row.matchType||item.matchType]||'';
 
         if(isExtra){
@@ -675,7 +676,7 @@ function buildCompareCard(item,idx){
                 <span class="book-name">${highlight(row.bookTitle,filterQuery)}</span>
                 <span class="db-heref">📌 ${highlight(row.heRef,filterQuery)}</span>
                 <span class="match-label match-${row.matchType||item.matchType}">${typeLabel}</span>
-                <div class="db-match-actions">${sefariaLink}${expandBtn}${otzariaBtn}${copyBtn}</div>
+                <div class="db-match-actions">${sefariaLink}${expandBtn}${otzariaBtn}${copyBtn}${verifyBtn}</div>
             </div>
             <div class="db-content" dir="rtl">${contentHtml}</div>
             <div class="page-expand-area" id="page-${idx}-0" style="display:none"></div>
@@ -1175,6 +1176,47 @@ document.addEventListener('click',(e)=>{
         if(area)area.style.display='none';
         const expandBtn=el.closest('.db-match,.db-match-extra')?.querySelector('.expand-page-btn');
         if(expandBtn)expandBtn.textContent='📖 הרחב לדף מלא';
+
+    }else if(action==='verify-ref'){
+        const ref=el.dataset.ref;
+        const cardIdx=parseInt(el.dataset.cardIdx);
+        // toggle: אם כבר מאומת — בטל אימות (הסר מהקובץ)
+        const item=sortedCache[cardIdx]||sortedCache.find(x=>x?.ref===ref);
+        if(!item)return;
+        const alreadyVerified=item._verified;
+        const filePath=inputFileEl?.value?.trim().replace(/^["']+|["']+$/g,'').trim()||'';
+
+        if(!filePath){
+            // אם אין קובץ (טקסט מודבק) — רק סמן ויזואלית
+            item._verified=!alreadyVerified;
+            const card=document.getElementById('card-'+cardIdx);
+            const btn=card?.querySelector('.verify-ref-btn');
+            if(btn){
+                btn.classList.toggle('verified',item._verified);
+                btn.title=item._verified?'מאומת ✓ — לחץ לביטול':'אמת הפניה זו במסמך המקורי';
+            }
+            return;
+        }
+
+        el.disabled=true;
+        const orig=el.textContent;
+        el.textContent='⏳';
+        invoke('insert_checkmark',{
+            filePath,
+            references:[ref],
+            brackets:getBracketValue(),
+        }).then(count=>{
+            item._verified=!alreadyVerified;
+            el.classList.toggle('verified',item._verified);
+            el.title=item._verified?'מאומת ✓ — לחץ לביטול':'אמת הפניה זו במסמך המקורי';
+            el.textContent=orig;
+            el.disabled=false;
+            if(count>0)setStatus(`✓ הוסף למסמך: ${ref}`,'ok');
+        }).catch(err=>{
+            el.textContent=orig;
+            el.disabled=false;
+            alert('שגיאה בכתיבה למסמך:\n'+err);
+        });
 
     }else if(action==='copy-citation'){
         // העתק ציטוט מעוצב: "שם הפניה (ספר, he_ref): תוכן..."
@@ -2437,4 +2479,5 @@ function wireAutoBracketDetection(textareaId, radioGroupName, hintId){
 
 wireAutoBracketDetection('pasteTextArea', 'brackets', 'bracketsAutoHint');
 wireAutoBracketDetection('biblioText', 'biblioBrackets', 'biblioBracketsAutoHint');
+
 
