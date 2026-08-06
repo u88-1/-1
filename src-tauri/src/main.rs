@@ -2653,6 +2653,9 @@ fn compare_start(
         let total = total_with_dups;
 
         // ── סריקה מקומית (blocking, מקבילית על מספר חיבורי קריאה-בלבד) ───────
+        // שמור רשימת שמות הפניות לפני ה-closure כי unique זז לתוכו
+        let unique_refs: Vec<String> = unique.iter().map(|r| r.reference.clone()).collect();
+
         let scan_app = app.clone();
         let scan_job = job_id.clone();
         let scan_abort = abort.clone();
@@ -2689,8 +2692,8 @@ fn compare_start(
         // עבור כל כפולה (idx > 0 ברשימת האינדקסים), נשדר את אותה תוצאה
         // עם אינדקס שונה — כך המשתמש רואה כרטיס לכל הפניה בטקסט.
         {
-            // בנה מיפוי: אינדקס-ייחודי → ref (כדי למצוא כפולות)
-            let idx_to_ref: Vec<&str> = unique.iter().map(|r| r.reference.as_str()).collect();
+            // unique_refs נשמר לפני ה-closure — unique עצמו כבר זז לתוכו
+            let idx_to_ref: Vec<&str> = unique_refs.iter().map(|r| r.as_str()).collect();
             let processed_so_far = scan.results.len();
             let mut dup_found = 0i64;
             let mut dup_not_found = 0i64;
@@ -2947,7 +2950,6 @@ fn insert_checkmark(file_path: String, references: Vec<String>, brackets: Option
             Err(_) => continue,
         };
 
-        let target = format!("{}{}{}", open, reference, close);
         let target_with_check = format!("{}{}{}✓", open, reference, close);
 
         // idempotent: אם כבר יש ✓ — לא נוגעים
