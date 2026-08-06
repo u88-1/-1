@@ -581,6 +581,20 @@ fn generate_variants(reference: &str) -> Vec<String> {
         }
         j += 1;
     }
+
+    // ⚡ מיון וריאנטים לפי סבירות: וריאנטים קצרים יותר (פחות מילים מיותרות)
+    // עולים ראשונים — Tantivy בודק אותם ראשון ועוצר מוקדם יותר.
+    // קריטריונים (נמוך = עדיף):
+    //   1. האם מכיל "דף " / "עמוד " / "פרק " — מילים שבמאגר לרוב מושמטות
+    //   2. אורך הוריאנט (קצר יותר = נקי יותר)
+    order.sort_by_key(|v| {
+        let noise = ["דף ", "עמוד ", "פרשה ", "סימן "]
+            .iter()
+            .filter(|w| v.contains(*w))
+            .count();
+        (noise, v.len())
+    });
+
     order
 }
 
@@ -2596,12 +2610,25 @@ fn compare_start(
             }
         };
 
-        // חילוץ הפניות + דה-דופליקציה גלובלית
+        // חילוץ הפניות + דה-דופליקציה חכמה:
+        // שולחים לסריקה רק הפניות *ייחודיות*, אך שומרים מיפוי
+        // reference → כל האינדקסים שלה (כולל כפולות) כדי לשדר
+        // את אותה תוצאה לכל ההופעות בטקסט.
         let all_refs = get_references_with_context(&text, &brackets);
-        let mut seen: HashSet<String> = HashSet::new();
+        let total_with_dups = all_refs.len(); // מספר ההפניות כולל כפולות
+
+        // מיפוי reference → [אינדקסים מקוריים בטקסט]
+        let mut ref_to_indices: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, r) in all_refs.iter().enumerate() {
+            ref_to_indices.entry(r.reference.clone()).or_default().push(i);
+        }
+
+        // רשימה ייחודית לסריקה — שומרת את הסדר של ההופעה הראשונה
+        let mut seen_for_unique: HashSet<String> = HashSet::new();
         let unique: Vec<RefCtx> = all_refs
             .into_iter()
-            .filter(|r| seen.insert(r.reference.clone()))
+            .filter(|r| seen_for_unique.insert(r.reference.clone()))
             .collect();
 
         if unique.is_empty() {
@@ -2621,7 +2648,9 @@ fn compare_start(
             return;
         }
 
-        let total = unique.len();
+        // מספר ההפניות *הכולל* (כולל כפולות) — כך שה-progress ו-summary
+        // מציגים את המספר האמיתי כפי שמשתמש מצפה לו.
+        let total = total_with_dups;
 
         // ── סריקה מקומית (blocking, מקבילית על מספר חיבורי קריאה-בלבד) ───────
         let scan_app = app.clone();
@@ -2654,6 +2683,52 @@ fn compare_start(
                 return;
             }
         };
+
+        // ── שידור תוצאות לכפולות ─────────────────────────────────────────────
+        // כל הפניה ייחודית שנסרקה עשויה להופיע מספר פעמים בטקסט.
+        // עבור כל כפולה (idx > 0 ברשימת האינדקסים), נשדר את אותה תוצאה
+        // עם אינדקס שונה — כך המשתמש רואה כרטיס לכל הפניה בטקסט.
+        {
+            // בנה מיפוי: אינדקס-ייחודי → ref (כדי למצוא כפולות)
+            let idx_to_ref: Vec<&str> = unique.iter().map(|r| r.reference.as_str()).collect();
+            let processed_so_far = scan.results.len();
+            let mut dup_found = 0i64;
+            let mut dup_not_found = 0i64;
+
+            for (unique_idx, ref_str) in idx_to_ref.iter().enumerate() {
+                let indices = ref_to_indices.get(*ref_str).cloned().unwrap_or_default();
+                if indices.len() <= 1 { continue; } // אין כפולות
+
+                // התוצאה של ההפניה הייחודית (אינדקס unique_idx בתוצאות הסריקה)
+                let base_result = match scan.results.get(unique_idx).and_then(|r| r.as_ref()) {
+                    Some(r) => r.clone(),
+                    None => continue,
+                };
+                let has_rows = !base_result.rows.is_empty();
+
+                // שדר לכל ההופעות החל מהשנייה (הראשונה כבר שודרה)
+                for &dup_idx in indices.iter().skip(1) {
+                    let processed = processed_so_far + dup_idx;
+                    if has_rows { dup_found += 1; } else { dup_not_found += 1; }
+                    let env = ResultEnvelope {
+                        job_id: &job_id,
+                        idx: dup_idx,
+                        result: &base_result,
+                        progress: Progress {
+                            total,
+                            processed,
+                            found_count: scan.found_count + dup_found,
+                            not_found_count: scan.not_found_count + dup_not_found,
+                            sefaria_update: false,
+                        },
+                    };
+                    let _ = app.emit("compare-result", &env);
+                }
+            }
+            // עדכן את ספירות ה-scan לכולל עם הכפולות
+            scan.found_count += dup_found;
+            scan.not_found_count += dup_not_found;
+        }
 
         let mut found_count = scan.found_count;
         let mut not_found_count = scan.not_found_count;
@@ -2840,6 +2915,56 @@ fn compare_start(
     });
 
     Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  insert_checkmark — מוסיף ✓ אחרי ההפניה המאושרת בקובץ המקורי
+//  תומך ב-txt ובקבצים מבוססי-טקסט. לכל הפניה ב-references מחפש
+//  את הדפוס {reference} בקובץ ומוסיף ✓ מיד אחרי הסוגר — כגון {ברכות ב.}✓
+//  אם ✓ כבר קיים לא מוסיף שוב (idempotent).
+// ════════════════════════════════════════════════════════════════════════════
+#[tauri::command]
+fn insert_checkmark(file_path: String, references: Vec<String>, brackets: Option<String>) -> Result<usize, String> {
+    let path = file_path.trim().trim_matches(|c| c == '"' || c == '\'');
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("שגיאה בקריאת הקובץ: {e}"))?;
+
+    let bracket_type = brackets.as_deref().unwrap_or("curly");
+    let (open, close) = bracket_chars(bracket_type);
+
+    let mut result = content.clone();
+    let mut count = 0usize;
+
+    for reference in &references {
+        if reference.is_empty() { continue; }
+        // בנה דפוס: {reference} — ממלט תווים מיוחדים ב-regex
+        let escaped_ref = regex::escape(reference);
+        let escaped_open = regex::escape(&open.to_string());
+        let escaped_close = regex::escape(&close.to_string());
+        let pattern = format!("{}{}{}", escaped_open, escaped_ref, escaped_close);
+        let re = match Regex::new(&pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let target = format!("{}{}{}", open, reference, close);
+        let target_with_check = format!("{}{}{}✓", open, reference, close);
+
+        // idempotent: אם כבר יש ✓ — לא נוגעים
+        if result.contains(&target_with_check) { continue; }
+
+        if re.is_match(&result) {
+            result = re.replace_all(&result, target_with_check.as_str()).to_string();
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        std::fs::write(path, result.as_bytes())
+            .map_err(|e| format!("שגיאה בכתיבת הקובץ: {e}"))?;
+    }
+
+    Ok(count)
 }
 
 fn err_summary(msg: String) -> Summary {
@@ -3197,6 +3322,7 @@ fn main() {
         .manage(Jobs(Arc::new(Mutex::new(HashMap::new()))))
         .manage(SefariaState(Arc::new(Mutex::new(None)))) // ⚡ cache בזיכרון
         .invoke_handler(tauri::generate_handler![
+            insert_checkmark,
             compare_start,
             compare_abort,
             expand_page,
@@ -3444,5 +3570,6 @@ mod tests {
         assert!(!is_recognized_source("ספר שאינו קיים כלל בעולם"));
     }
 }
+
 
 
