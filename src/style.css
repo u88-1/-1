@@ -1994,6 +1994,21 @@ mark.focus-mark {
 }
 .copy-citation-btn:hover { background: var(--gold-dim); border-color: var(--gold-border); color: var(--gold-light); }
 
+/* ── כפתור אומת ✓ ── */
+.verify-ref-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 24px; border-radius: 5px;
+    background: var(--bg-3, rgba(255,255,255,0.05)); border: 1px solid var(--border);
+    color: var(--text-2); font-size: 0.85rem; cursor: pointer; font-weight: 600;
+    transition: all 0.15s ease; flex-shrink: 0;
+}
+.verify-ref-btn:hover { background: rgba(34,197,94,0.15); border-color: #22c55e; color: #22c55e; }
+.verify-ref-btn.verified {
+    background: rgba(34,197,94,0.2); border-color: #22c55e; color: #22c55e;
+    box-shadow: 0 0 0 1px rgba(34,197,94,0.3);
+}
+.verify-ref-btn:disabled { opacity: 0.5; cursor: default; }
+
 /* ── רמז ל"לא נמצא" עם לינק Sefaria ── */
 .missing-hint {
     margin-top: 8px; font-size: 0.8rem; color: var(--text-3);
@@ -2192,4 +2207,5 @@ mark.otz-hl {
     background: rgba(239,68,68,0.1);
     border-color: #ef4444; color: #ef4444;
 }
+
 
