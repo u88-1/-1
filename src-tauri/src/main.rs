@@ -633,6 +633,11 @@ struct RefCtx {
     quote_before: String,
     /// וריאנטים מחושבים מראש (לפני חלוקה ל-threads) — חוסך חישוב כפול
     variants: Vec<String>,
+    /// כל ההקשרים (משפטים) של כל הופעה של הפניה זו במסמך.
+    /// [0] = sentence לעיל (ההופעה הראשונה), [1..] = הופעות נוספות.
+    all_sentences: Vec<String>,
+    /// מספר הופעות סה"כ של הפניה זו בטקסט (כולל ההופעה הראשונה).
+    occurrence_count: usize,
 }
 
 static RE_QUOTE1: Lazy<Regex> =
@@ -689,7 +694,11 @@ fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
     let ec = regex_escape(&close.to_string());
     let re = Regex::new(&format!("{}([^{}]+){}", eo, ec, ec)).unwrap();
     let full_chars: Vec<char> = text.chars().collect();
-    let mut refs = Vec::new();
+
+    // dedup: מפתח = reference מנורמל → אינדקס ב-refs (שומר על סדר הכנסה)
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut refs: Vec<RefCtx> = Vec::new();
+
     for cap in re.captures_iter(text) {
         let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let reference = normalize_ref(raw);
@@ -697,13 +706,28 @@ fn get_references_with_context(text: &str, brackets: &str) -> Vec<RefCtx> {
             continue;
         }
         let (sentence, quote_before) = extract_context(&full_chars, raw, open, close);
-        let variants = generate_variants(&reference);
-        refs.push(RefCtx {
-            reference,
-            sentence,
-            quote_before,
-            variants,
-        });
+
+        if let Some(&existing_idx) = seen.get(&reference) {
+            // הפניה כבר קיימת — רק הוסף את ההקשר הנוסף ועדכן ספירה
+            let ctx = &mut refs[existing_idx];
+            ctx.occurrence_count += 1;
+            if !sentence.is_empty() && !ctx.all_sentences.contains(&sentence) {
+                ctx.all_sentences.push(sentence);
+            }
+        } else {
+            // הפניה חדשה
+            let variants = generate_variants(&reference);
+            let all_sentences = if sentence.is_empty() { vec![] } else { vec![sentence.clone()] };
+            seen.insert(reference.clone(), refs.len());
+            refs.push(RefCtx {
+                reference,
+                sentence,
+                quote_before,
+                variants,
+                all_sentences,
+                occurrence_count: 1,
+            });
+        }
     }
     refs
 }
@@ -1911,6 +1935,10 @@ struct ResultOut {
     sentence: String,
     quote_before: String,
     is_bavli: bool,
+    /// כמה פעמים מופיעה הפניה זו בטקסט המקורי.
+    occurrence_count: usize,
+    /// ההקשר (משפט) של כל הופעה — [0] זהה ל-sentence, [1..] הופעות נוספות.
+    all_sentences: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -2363,6 +2391,8 @@ fn scan_chunk(
             sentence: rc.sentence.clone(),
             quote_before: rc.quote_before.clone(),
             is_bavli: detect_bavli(&rc.reference).is_some(),
+            occurrence_count: rc.occurrence_count,
+            all_sentences: rc.all_sentences.clone(),
         };
 
         // עדכון אטומי של המונים המשותפים (כל ה-threads כותבים לאותם מונים).

@@ -1963,6 +1963,36 @@ mark.focus-mark {
     display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
 }
 
+/* ── תג הופעות (× N) ── */
+.occ-badge {
+    display: inline-flex; align-items: center;
+    font-size: 0.72rem; font-weight: 700; padding: 2px 8px;
+    border-radius: 20px; border: 1px solid rgba(212,179,102,0.4);
+    background: rgba(212,179,102,0.12); color: var(--gold);
+    vertical-align: middle; letter-spacing: 0.02em;
+}
+
+/* ── רשימת הקשרים מרובים ── */
+.occ-details { margin: 0; }
+.occ-details summary.occ-summary {
+    font-size: 12px; color: var(--text-2); cursor: pointer;
+    padding: 3px 0; list-style: none; user-select: none;
+}
+.occ-details summary.occ-summary::before { content: '▸ '; }
+.occ-details[open] summary.occ-summary::before { content: '▾ '; }
+.occ-list { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.occ-sentence {
+    display: flex; gap: 6px; align-items: baseline;
+    font-size: 13px; line-height: 1.6;
+    padding: 5px 8px; border-radius: var(--r-xs);
+    background: rgba(212,179,102,0.05);
+    border-right: 2px solid var(--gold-border);
+}
+.occ-num {
+    font-size: 11px; color: var(--gold); font-weight: 700;
+    min-width: 18px; text-align: center; flex-shrink: 0;
+}
+
 /* ── כפתורי פעולה בשורה (Sefaria, דף מלא, אוצריא, העתק) ── */
 .db-match-actions {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px;

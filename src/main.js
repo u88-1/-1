@@ -616,12 +616,30 @@ function buildCompareCard(item,idx){
     const confidence=calcConfidence(item);
     const confMeta=confidenceMeta(confidence);
     const confBadge=`<span class="conf-badge ${confMeta.cls}" title="ציון ביטחון: ${confMeta.label}">🎯 ${confMeta.label}</span>`;
-    const sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
+
+    // תג כמות הופעות — מוצג רק אם הפניה מופיעה יותר מפעם אחת
+    const occCount=item.occurrenceCount||1;
+    const occBadge=occCount>1?`<span class="occ-badge" title="הפניה זו מופיעה ${occCount} פעמים במסמך">× ${occCount}</span>`:'';
+
+    // בניית HTML להקשרים: אם יש כמה הקשרים — מציג את כולם בתוך details
+    const allSentences=item.allSentences||[];
+    let sentenceHtml;
+    if(allSentences.length>1){
+        const items=allSentences.map((s,i)=>
+            `<div class="occ-sentence"><span class="occ-num">${i+1}.</span> ${markRefInSentence(s,item.ref)}</div>`
+        ).join('');
+        sentenceHtml=`<details class="occ-details" ${allSentences.length<=3?'open':''}>
+            <summary class="occ-summary">${occCount} הופעות — לחץ להרחבה</summary>
+            <div class="occ-list">${items}</div>
+        </details>`;
+    } else {
+        sentenceHtml=item.sentence?markRefInSentence(item.sentence,item.ref):`<span style="color:var(--text-3)">(אין הקשר)</span>`;
+    }
 
     if(!item.rows?.length){
         return`<div class="ccard ccard-missing" id="card-${idx}">
             <div class="ccard-ref-row">
-                <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}${confBadge}
+                <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>${badge}${confBadge}${occBadge}
             </div>
             <div class="ccard-cols">
                 <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
@@ -689,7 +707,7 @@ function buildCompareCard(item,idx){
     return`<div class="ccard" id="card-${idx}">
         <div class="ccard-ref-row">
             <span class="ccard-ref">${highlight(item.ref,filterQuery)}</span>
-            <div class="ccard-badges">${badge}${confBadge}${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}</div>
+            <div class="ccard-badges">${badge}${confBadge}${occBadge}${item.rows.length>1?`<span class="multi-count">${item.rows.length} תוצאות</span>`:''}</div>
         </div>
         <div class="ccard-cols">
             <div class="ccard-source"><div class="ccard-section-label">📄 מהמקור</div><div class="ccard-sentence">${sentenceHtml}</div></div>
