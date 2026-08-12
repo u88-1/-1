@@ -478,3 +478,214 @@ if (document.readyState === 'loading') {
 } else {
     initAnalyzer();
 }
+
+/* =====================================================
+   סורק ר"ת ופירושים
+   ===================================================== */
+
+// ── סטייט ──────────────────────────────────────────
+let _acPairs   = [];   // [{id, acronym, definition, bracketOpen, bracketClose, decision:'keep-acr'|'keep-def'|null}]
+let _acText    = '';   // הטקסט המקורי המלא
+
+// ── זיהוי ר"ת ────────────────────────────────────────
+// ר"ת = מילה עברית עם גרש/גרשיים: א"ב, ז"ל, ר"ת, רמב"ם וכד'
+const GERSH_RE = /([א-ת]+["״\u05f4][א-ת]+(?:["״\u05f4][א-ת]*)*)/g;
+
+function bracketChars(type) {
+    if (type === 'square') return ['[', ']'];
+    if (type === 'curly')  return ['{', '}'];
+    return ['(', ')'];
+}
+
+function scanAcronyms(text, bracketType) {
+    const [open, close] = bracketChars(bracketType);
+    const oe = open.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const ce = close.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+
+    // בנה Regex שמוצא: <ר"ת> <רווח?> <(פירוש)>
+    // או ר"ת ללא פירוש
+    const pairRe = new RegExp(
+        `(${GERSH_RE.source})` +           // קבוצה 1: הר"ת
+        `(?:\\s*${oe}([^${ce}]+)${ce})?`,  // קבוצה 2 (אופציונלי): הפירוש בסוגריים
+        'g'
+    );
+
+    const pairs = [];
+    let id = 0;
+    let m;
+    pairRe.lastIndex = 0;
+    while ((m = pairRe.exec(text)) !== null) {
+        const acronym    = m[1];
+        const definition = m[2] ? m[2].trim() : null;
+        // סנן: ר"ת קצר מדי (אות אחת בלבד) — דלג
+        const letters = acronym.replace(/["״\u05f4]/g,'');
+        if (letters.length < 2) continue;
+        pairs.push({
+            id: id++,
+            acronym,
+            definition,
+            open,
+            close,
+            fullMatch: m[0],
+            index: m.index,
+            decision: null,
+        });
+    }
+    return pairs;
+}
+
+// ── בניית תצוגת הטקסט עם סימונים ──────────────────
+function buildAcronymPreview(text, pairs) {
+    // עובד מהסוף להתחלה כדי לא לבלבל אינדקסים
+    let out = esc(text);
+    // מפה מתו-אינדקס ל-pair id
+    // נבנה HTML על בסיס הטקסט ה-escaped — פשוט יותר עם replace
+    // בגלל שה-escape שינה אורך, נבנה ישירות על הטקסט הגולמי ואז נ-escape ידנית
+    const sorted = [...pairs].sort((a,b) => b.index - a.index);
+    let chars = [...text]; // מערך תווים
+    for (const p of sorted) {
+        const len    = p.fullMatch.length;
+        const before = chars.slice(0, p.index).join('');
+        const after  = chars.slice(p.index + len).join('');
+        const hasDef = p.definition !== null;
+        const cls    = hasDef ? 'ac-pair' : 'ac-solo';
+        const dec    = p.decision;
+        const decCls = dec === 'keep-acr' ? ' dec-acr' : dec === 'keep-def' ? ' dec-def' : '';
+        const acrSpan = `<span class="ac-acr${decCls ? ' faded':''}" data-acid="${p.id}" title="לחץ לבחור ר&quot;ת">${esc(p.acronym)}</span>`;
+        const defSpan = hasDef
+            ? ` <span class="ac-def${decCls ? ' faded':''}" data-acid="${p.id}" title="לחץ לבחור פירוש">${esc(p.open)}${esc(p.definition)}${esc(p.close)}</span>`
+            : '';
+        const wrapped = `<span class="ac-wrap ${cls}${decCls}" data-acid="${p.id}">${acrSpan}${defSpan}</span>`;
+        chars = [...before, ...wrapped, ...after]; // replace בטקסט
+    }
+    return chars.join('');
+}
+
+// ── בניית טבלת ההחלטות ────────────────────────────
+function buildPairsTable(pairs) {
+    if (!pairs.length) return '<div class="analyzer-empty"><div class="empty-icon">🔍</div>לא נמצאו ר"ת בטקסט</div>';
+    return pairs.map(p => {
+        const hasDef = p.definition !== null;
+        const dec    = p.decision;
+        return `<div class="ac-row ${dec ? 'ac-decided' : ''}" data-acid="${p.id}">
+            <button class="ac-btn ac-btn-acr ${dec==='keep-acr'?'ac-chosen':''}"
+                data-acid="${p.id}" data-choice="keep-acr"
+                title="השאר רק את הר&quot;ת — מחק פירוש">
+                ${esc(p.acronym)}
+            </button>
+            ${hasDef
+                ? `<span class="ac-vs">↔</span>
+                   <button class="ac-btn ac-btn-def ${dec==='keep-def'?'ac-chosen':''}"
+                       data-acid="${p.id}" data-choice="keep-def"
+                       title="השאר רק את הפירוש — מחק ר&quot;ת">
+                       ${esc(p.definition)}
+                   </button>`
+                : `<span class="ac-no-def" title="אין פירוש בסוגריים אחרי ר&quot;ת זה">ללא פירוש</span>`
+            }
+            ${dec ? `<button class="ac-undo" data-acid="${p.id}" title="בטל בחירה">↩</button>` : ''}
+        </div>`;
+    }).join('');
+}
+
+// ── עדכון תצוגה אחרי כל החלטה ──────────────────────
+function refreshAcronymUI() {
+    document.getElementById('acronymPreview').innerHTML    = buildAcronymPreview(_acText, _acPairs);
+    document.getElementById('acronymPairsTable').innerHTML = buildPairsTable(_acPairs);
+}
+
+// ── ייצוא טקסט מעובד ───────────────────────────────
+function exportAcronymText() {
+    let text = _acText;
+    // מהסוף להתחלה — מונע היסטוריית אינדקסים
+    const decided = _acPairs
+        .filter(p => p.decision)
+        .sort((a,b) => b.index - a.index);
+
+    for (const p of decided) {
+        let replacement;
+        if (p.decision === 'keep-acr') {
+            replacement = p.acronym;
+        } else {
+            replacement = p.definition || p.acronym;
+        }
+        text = text.slice(0, p.index) + replacement + text.slice(p.index + p.fullMatch.length);
+    }
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'טקסט-מעובד.txt'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ── אתחול ───────────────────────────────────────────
+function initAcronymScanner() {
+    const scanBtn   = document.getElementById('acronymScanBtn');
+    const clearBtn  = document.getElementById('acronymClearBtn');
+    const exportBtn = document.getElementById('acronymExportBtn');
+    const results   = document.getElementById('acronymResults');
+    const preview   = document.getElementById('acronymPreview');
+    const table     = document.getElementById('acronymPairsTable');
+
+    if (!scanBtn) return;
+
+    // סריקה
+    scanBtn.addEventListener('click', () => {
+        const text = document.getElementById('acronymInput')?.value?.trim() || '';
+        if (!text) return;
+        const bType = document.querySelector('input[name="acronymBrackets"]:checked')?.value || 'round';
+        _acText  = text;
+        _acPairs = scanAcronyms(text, bType);
+        results.style.display = '';
+        refreshAcronymUI();
+    });
+
+    // ניקוי
+    clearBtn.addEventListener('click', () => {
+        document.getElementById('acronymInput').value = '';
+        results.style.display = 'none';
+        _acPairs = []; _acText = '';
+    });
+
+    // קליקים על טבלה (delegated) — בחירת החלטה
+    document.getElementById('acronymResults').addEventListener('click', e => {
+        // כפתור בחירה
+        const btn = e.target.closest('.ac-btn');
+        if (btn) {
+            const id     = +btn.dataset.acid;
+            const choice = btn.dataset.choice;
+            const pair   = _acPairs.find(p => p.id === id);
+            if (pair) { pair.decision = choice; refreshAcronymUI(); }
+            return;
+        }
+        // ביטול בחירה
+        const undo = e.target.closest('.ac-undo');
+        if (undo) {
+            const pair = _acPairs.find(p => p.id === +undo.dataset.acid);
+            if (pair) { pair.decision = null; refreshAcronymUI(); }
+            return;
+        }
+        // קליק על הטקסט המסומן בתצוגה
+        const acr = e.target.closest('.ac-acr');
+        if (acr) {
+            const pair = _acPairs.find(p => p.id === +acr.dataset.acid);
+            if (pair) { pair.decision = pair.decision === 'keep-acr' ? null : 'keep-acr'; refreshAcronymUI(); }
+            return;
+        }
+        const def = e.target.closest('.ac-def');
+        if (def) {
+            const pair = _acPairs.find(p => p.id === +def.dataset.acid);
+            if (pair) { pair.decision = pair.decision === 'keep-def' ? null : 'keep-def'; refreshAcronymUI(); }
+        }
+    });
+
+    // ייצוא
+    exportBtn?.addEventListener('click', exportAcronymText);
+}
+
+// אתחול
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAcronymScanner);
+} else {
+    initAcronymScanner();
+}
+

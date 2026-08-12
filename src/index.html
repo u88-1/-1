@@ -25,10 +25,6 @@
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2" stroke-linecap="round"/></svg>
                 <span class="nav-label">היסטוריה</span>
             </a>
-            <a class="nav-link" href="#" data-page="biblio" title="ניתוח ביבליוגרפי">
-                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.5"/><circle cx="14" cy="6" r="2.5"/><circle cx="10" cy="15" r="2.5"/><path d="M8 7.5L9 13M12 7.5L11 13" stroke-linecap="round"/></svg>
-                <span class="nav-label">ניתוח ביבליוגרפי</span>
-            </a>
             <a class="nav-link" href="#" data-page="aieditor" title="עורך AI">
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h9l3 3v9H4z"/><path d="M7 8h6M7 11h6M7 14h3" stroke-linecap="round"/></svg>
                 <span class="nav-label">עורך AI — פיסוק ומקורות</span>
@@ -162,114 +158,6 @@
                 <button class="run-btn" id="clearHistoryBtn" style="background:rgba(248,113,113,0.15);color:var(--red);border:1px solid rgba(248,113,113,0.25);">🗑 נקה היסטוריה</button>
             </header>
             <div id="historyList"></div>
-        </div>
-
-        <!-- ══ PAGE: ניתוח ביבליוגרפי ══ -->
-        <div id="page-biblio" class="page" style="display:none">
-            <header class="page-header centered-header">
-                <div>
-                    <div class="header-ornament">✦ ✡ ✦</div>
-                    <h1 class="page-title">ניתוח <span>ביבליוגרפי</span></h1>
-                    <p class="page-sub">סטטיסטיקת מקורות, ענן ציטוטים וקשרים בין מקורות — עם איחוד אוטומטי של כתיבים שונים לאותו מקור</p>
-                    <div class="gold-line"></div>
-                </div>
-            </header>
-
-            <section class="panel">
-                <div class="panel-title"><div class="panel-icon">📚</div>טקסט לניתוח</div>
-                <div class="fields" style="grid-template-columns:1fr;margin-bottom:10px">
-                    <div class="field">
-                        <label class="field-label" for="biblioFile">טעינת קובץ טקסט <span class="tag-opt">.txt</span></label>
-                        <div class="field-wrap">
-                            <input type="file" id="biblioFileInput" accept=".txt" style="display:none" />
-                            <input id="biblioFile" type="text" class="field-input" placeholder="לא נבחר קובץ — אפשר גם להדביק טקסט ישירות למטה" readonly />
-                            <button class="browse-btn" data-action="biblio-browse" title="בחר קובץ טקסט">📂</button>
-                        </div>
-                        <p class="field-hint">לקבצי Word/PDF: הרץ אותם קודם ב"השוואת מקורות", ואז הדבק את הטקסט כאן.</p>
-                    </div>
-                </div>
-                <textarea id="biblioText" class="paste-textarea" style="min-height:160px" placeholder="הדבק כאן טקסט עם הפניות בסוגריים, למשל: כתב הרמב&quot;ם {שבת ז, א} וכן {ברכות ב.} ...&#10;&#10;טיפ: הוסף שורה ריקה בין פסקאות, וציין 'פרק X' / 'סימן X' כדי שהמערכת תעקוב אחרי מיקום כל מקור במבנה הספר."></textarea>
-                <div class="bracket-row">
-                    <span class="field-label" style="margin-left:12px">סוג סוגריים:</span>
-                    <div class="bracket-opts">
-                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="curly" checked /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
-                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
-                        <label class="bracket-opt"><input type="radio" name="biblioBrackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
-                    </div>
-                    <span id="biblioBracketsAutoHint" class="field-hint" style="margin:0 8px"></span>
-                </div>
-                <button id="biblioRunBtn" class="run-btn">
-                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l3 3" stroke-linecap="round"/></svg>
-                    הפעל ניתוח ביבליוגרפי
-                </button>
-            </section>
-
-            <div id="biblioStatus" class="status-bar" style="display:none"></div>
-
-            <div id="biblioResults" style="display:none">
-                <div class="summary-grid" id="biblioKpis" style="margin-bottom:16px"></div>
-
-                <section class="panel">
-                    <div class="panel-title" style="justify-content:space-between;display:flex;align-items:center">
-                        <div style="display:flex;align-items:center;gap:10px"><div class="panel-icon">📊</div>תוצאות הניתוח</div>
-                        <div style="display:flex;gap:8px">
-                            <button class="browse-btn" id="biblioVerifyBtn" title="בדוק מול מסד הנתונים בפועל אילו מקורות אכן קיימים">🔍 אימות מול המאגר</button>
-                            <button class="browse-btn" id="biblioDownloadCsv" title="הורד טבלת מקורות כ-CSV">⬇️ CSV</button>
-                            <button class="browse-btn" id="biblioDownloadTxt" title="הורד את הטקסט (לאחר תיקוני שם אם בוצעו)">💾 טקסט מתוקן</button>
-                        </div>
-                    </div>
-                    <div class="bracket-opts" style="margin-bottom:14px">
-                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="stats" checked /><span class="bracket-btn">📋</span>סטטיסטיקה</label>
-                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="cloud" /><span class="bracket-btn">☁️</span>ענן מקורות</label>
-                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="relations" /><span class="bracket-btn">🔗</span>קשרים</label>
-                        <label class="bracket-opt"><input type="radio" name="biblioTab" value="chapters" /><span class="bracket-btn">📖</span>פילוח לפי פרק</label>
-                    </div>
-
-                    <div id="biblioTabStats" class="biblio-tab-view">
-                        <div class="biblio-toolbar">
-                            <input id="biblioFilterInput" type="text" class="field-input" placeholder="🔍 סנן לפי שם מקור..." style="max-width:220px" />
-                            <select id="biblioSortSelect" class="field-input" style="max-width:170px">
-                                <option value="count-desc">מיון: הכי הרבה מופעים</option>
-                                <option value="count-asc">מיון: הכי מעט מופעים</option>
-                                <option value="name">מיון: אלפביתי</option>
-                            </select>
-                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyUnrecognized" /> רק לא-מזוהים</label>
-                            <label class="biblio-toolbar-check"><input type="checkbox" id="biblioOnlyNotInDb" /> רק לא-במאגר</label>
-                        </div>
-                        <div class="table-wrap">
-                            <table>
-                                <thead><tr>
-                                    <th>מקור (לחץ ✏️ לתיקון גלובלי בכל הצורות שנמצאו)</th>
-                                    <th style="width:70px">מופעים</th>
-                                    <th style="width:160px">מיקומים</th>
-                                    <th style="width:110px">אימות</th>
-                                </tr></thead>
-                                <tbody id="biblioStatsBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div id="biblioTabCloud" class="biblio-tab-view" style="display:none">
-                        <p class="field-hint" style="margin-bottom:10px">לחיצה על מקור בענן תפתח אותו בטבלת הסטטיסטיקה:</p>
-                        <div class="cloud-box" id="biblioCloud"></div>
-                    </div>
-
-                    <div id="biblioTabRelations" class="biblio-tab-view" style="display:none">
-                        <p class="field-hint" style="margin-bottom:10px">מקורות (לאחר איחוד וריאציות) שנוטים להופיע יחד באותה פסקה:</p>
-                        <div class="table-wrap">
-                            <table>
-                                <thead><tr><th>מקור א׳</th><th>מקור ב׳</th><th style="width:120px">הופעות משותפות</th></tr></thead>
-                                <tbody id="biblioRelationsBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div id="biblioTabChapters" class="biblio-tab-view" style="display:none">
-                        <p class="field-hint" style="margin-bottom:10px">כמות ציטוטים לפי מיקום במסמך — עוזר לאתר פרקים עם צפיפות ציטוטים חריגה:</p>
-                        <div id="biblioChaptersBox"></div>
-                    </div>
-                </section>
-            </div>
         </div>
 
         <!-- ══ PAGE: עורך AI — פיסוק ומקורות ══ -->
@@ -692,45 +580,53 @@
                 <div id="analyzerStatus" class="status-bar error" style="display:none;margin-top:8px"></div>
             </section>
 
-            <!-- תוצאות -->
-            <div id="analyzerResults" style="display:none">
-                <!-- KPIs -->
-                <section class="panel">
-                    <div class="panel-title"><div class="panel-icon">📊</div>סיכום ממצאים</div>
-                    <div class="analyzer-kpis" id="analyzerKpis"></div>
-                </section>
+            <!-- ══ סורק ר"ת ופירושים ══ -->
+            <section class="panel" style="margin-top:20px">
+                <div class="panel-title"><div class="panel-icon">🔤</div>סורק ראשי תיבות ופירושים</div>
+                <p class="field-hint" style="margin-bottom:12px">
+                    סורק את הטקסט לזוגות <strong>ר"ת (פירוש)</strong> — לחץ על ר"ת כדי למחוק את הפירוש, או על הפירוש כדי למחוק את הר"ת.
+                </p>
 
-                <!-- טבלה -->
-                <section class="panel">
-                    <div class="panel-title"><div class="panel-icon">🔬</div>פרטי הניתוח</div>
+                <!-- קלט נפרד לסורק הר"ת -->
+                <textarea id="acronymInput" class="paste-textarea" style="min-height:160px;font-family:'Frank Ruhl Libre',serif;font-size:15px" placeholder="הדבק כאן טקסט עם ר&quot;ת ופירושים, למשל: &#10;כתב הרמב&quot;ם ז&quot;ל (זכרונו לברכה) שיש לעיין ב&quot;ז (בזה) וכן ר&quot;ת (ראשי תיבות) ממש."></textarea>
 
-                    <!-- פילטרים -->
-                    <div class="analyzer-filter-bar" id="analyzerFilterBar">
-                        <span class="field-label" style="margin-left:6px">סנן:</span>
-                        <button class="filter-chip active" data-sev="all">הכל</button>
-                        <button class="filter-chip chip-error" data-sev="error">שגיאות בלבד</button>
-                        <button class="filter-chip chip-warning" data-sev="warning">אזהרות בלבד</button>
-                        <button class="filter-chip chip-ok" data-sev="ok">תקין בלבד</button>
+                <!-- שאילתא סוגריים -->
+                <div style="display:flex;align-items:center;gap:16px;margin-top:12px;flex-wrap:wrap">
+                    <span class="field-label">סוגריים של פירוש:</span>
+                    <div class="bracket-opts">
+                        <label class="bracket-opt"><input type="radio" name="acronymBrackets" value="round" checked /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
+                        <label class="bracket-opt"><input type="radio" name="acronymBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
+                        <label class="bracket-opt"><input type="radio" name="acronymBrackets" value="curly" /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
+                    </div>
+                    <button id="acronymScanBtn" class="run-btn" style="max-width:160px">
+                        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="6"/><path d="M15 15l2.5 2.5" stroke-linecap="round"/></svg>
+                        סרוק
+                    </button>
+                    <button id="acronymClearBtn" class="browse-btn">✕ נקה</button>
+                </div>
+            </section>
+
+            <!-- תוצאות סורק ר"ת -->
+            <div id="acronymResults" style="display:none">
+                <section class="panel">
+                    <div class="panel-title" style="justify-content:space-between;display:flex;align-items:center">
+                        <span><div class="panel-icon" style="display:inline-block">📋</div> זוגות שנמצאו</span>
+                        <button id="acronymExportBtn" class="browse-btn">📄 ייצא טקסט מעובד</button>
                     </div>
 
-                    <div class="analyzer-table-wrap">
-                        <table class="analyzer-table" id="analyzerTable">
-                            <thead>
-                                <tr>
-                                    <th style="width:110px">מיקום</th>
-                                    <th>קטע</th>
-                                    <th style="width:220px">ניתוח</th>
-                                    <th style="width:220px">פעולה</th>
-                                </tr>
-                            </thead>
-                            <tbody id="analyzerTbody"></tbody>
-                        </table>
-                    </div>
+                    <!-- תצוגת 2 עמודות: טקסט מסומן | טבלת החלטות -->
+                    <div class="acronym-split">
+                        <!-- עמודה שמאל: טקסט מקורי עם סימונים -->
+                        <div class="acronym-preview-wrap">
+                            <div class="acronym-col-title">טקסט מקורי</div>
+                            <div id="acronymPreview" class="acronym-preview" dir="rtl"></div>
+                        </div>
 
-                    <!-- ייצוא -->
-                    <div class="analyzer-action-bar">
-                        <button id="analyzerExportCsv" class="browse-btn">📥 ייצא CSV</button>
-                        <button id="analyzerExportTxt" class="browse-btn">📄 ייצא טקסט מתוקן</button>
+                        <!-- עמודה ימין: טבלת החלטות -->
+                        <div class="acronym-table-wrap">
+                            <div class="acronym-col-title">בחר מה להשאיר</div>
+                            <div id="acronymPairsTable"></div>
+                        </div>
                     </div>
                 </section>
             </div>

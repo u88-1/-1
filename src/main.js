@@ -344,7 +344,7 @@ document.getElementById('pasteVerifyToggle')?.addEventListener('click',()=>{
 let _historyDirty = true;
 function showPage(name){
     if(!name)return;
-    ['compare','history','biblio','aieditor','summarizer','analyzer','about','settings'].forEach(p=>{
+    ['compare','history','aieditor','summarizer','analyzer','about','settings'].forEach(p=>{
         const el=document.getElementById('page-'+p);
         if(el)el.style.display=p===name?'':'none';
     });
