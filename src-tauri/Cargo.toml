@@ -59,5 +59,9 @@ custom-protocol = ["tauri/custom-protocol"]
 panic = "abort"     # בינארי קטן יותר
 codegen-units = 1
 lto = true
-opt-level = "s"     # אופטימיזציה לגודל — מתאים למטרת "קל ומהיר"
+# ⚡ perf: opt-level=3 — אופטימיזציה מלאה למהירות (במקום "s" שמייעל לגודל).
+# הגודל הנוסף של הבינארי (כמה MB) זניח לחלוטין ביחס לשיפור המהירות:
+# vectorization אוטומטי, inlining אגרסיבי, unrolling — כולם מועילים
+# בלולאת הסריקה הפנימית (collect_batch, strip_tags, generate_variants).
+opt-level = 3
 strip = true

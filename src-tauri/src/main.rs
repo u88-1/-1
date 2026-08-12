@@ -40,7 +40,9 @@ const SEFARIA_CONCURRENCY: usize = 6;
 const SEFARIA_CACHE_TTL_SECS: i64 = 60 * 60 * 24 * 180;
 // מספר חיבורי קריאה-בלבד מקביליים לסריקה המקומית. עם Tantivy אנחנו פחות
 // תלויים ב-IO כבד, אבל עדיין שומרים workers לסריקת תוכן מורחב.
-const MAX_SCAN_WORKERS: usize = 4;
+// ⚡ perf: מוגדר גבוה מספיק שה-clamp(1, MAX_SCAN_WORKERS) ב-local_scan_parallel
+// יתן ל-available_parallelism() לקבוע בפועל — כך מחשב עם 16 ליבות ישתמש בכולן.
+const MAX_SCAN_WORKERS: usize = 32;
 
 // ════════════════════════════════════════════════════════════════════════════
 //  1. נתוני ליבה — מסכתות, גימטריה, קיצורים, מיפוי Sefaria
@@ -266,6 +268,12 @@ static RE_TRAIL_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"[.,;:]+$").unwrap
 static RE_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
 
 fn strip_tags(s: &str) -> String {
+    // ⚡ perf: early-exit — רוב השורות במאגר לא מכילות תגיות HTML.
+    // בדיקת '<' זולה בהרבה מהפעלת מנוע ה-Regex על כל שורה.
+    if !s.contains('<') {
+        let trimmed = s.trim();
+        return if trimmed.len() == s.len() { s.to_string() } else { trimmed.to_string() };
+    }
     RE_TAGS.replace_all(s, "").trim().to_string()
 }
 
@@ -1605,16 +1613,23 @@ fn open_db(path: &str) -> Result<OpenDb, String> {
     // Pragmas לביצועים — best-effort (חלקם עלולים להיכשל על DB קריאה-בלבד).
     for pragma in [
         "PRAGMA query_only = ON;",
-        "PRAGMA cache_size = -64000;",
+        // ⚡ perf: 128MB page cache (כפול מקודם) — מפחית I/O חוזר על שאילתות
+        // prefix/fuzzy שסורקות ranges גדולים. שווה זיכרון כי ה-DB קריאה-בלבד
+        // ולא מחזיק dirty pages.
+        "PRAGMA cache_size = -131072;",
         "PRAGMA temp_store = MEMORY;",
-        "PRAGMA mmap_size = 268435456;",
-        // מאפשר ל-SQLite להשתמש בריצות פנימיות מקבילות לסריקות גדולות.
-        "PRAGMA threads = 4;",
-        // מפחית lock-contention בקריאה-בלבד (WAL mode): מאפשר לקרוא pages
-        // שעדיין לא עברו checkpoint בלי להמתין ל-lock של כותב.
+        // ⚡ perf: 1GB mmap — כשה-DB מתאים בזיכרון, הגישה מהירה כמו מערך.
+        // ב-Windows mmap קריאה-בלבד בטוח לחלוטין (אין שיתוף כתיבה).
+        "PRAGMA mmap_size = 1073741824;",
+        // ⚡ perf: threads פנימיים — מאפשר ל-SQLite להשתמש בריצות מקבילות
+        // בסריקות גדולות (JOIN, sort). כפול מהגדרה הקודמת.
+        "PRAGMA threads = 8;",
+        // מפחית lock-contention בקריאה-בלבד (WAL mode).
         "PRAGMA read_uncommitted = TRUE;",
-        // מריץ ANALYZE קל על טבלאות/אינדקסים שלא נותחו לאחרונה —
-        // משפר את תוכניות השאילתות של query planner.
+        // ⚡ perf: page size גדול — מפחית מספר ה-pages שנטענים לסריקות ארוכות.
+        // אפשרי רק לפני יצירת ה-DB; על DB קיים יוחזר שגיאה ויתעלם ממנה.
+        "PRAGMA page_size = 8192;",
+        // מריץ ANALYZE קל — משפר את תוכניות השאילתות של query planner.
         "PRAGMA optimize;",
     ] {
         let _ = conn.execute_batch(pragma);
