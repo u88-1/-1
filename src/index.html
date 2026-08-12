@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;700;900&family=Heebo:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="analyzer.css" />
 </head>
 <body>
 <div class="layout">
@@ -40,6 +41,10 @@
             <a class="nav-link" href="#" id="otzSpotlightTrigger" title="חיפוש באוצריא (Ctrl+K)">
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="6"/><path d="M15 15l2.5 2.5" stroke-linecap="round"/></svg>
                 <span class="nav-label">חיפוש באוצריא</span>
+            </a>
+            <a class="nav-link" href="#" data-page="analyzer" title="עורך עריכה אנליטי">
+                <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 11h4" stroke-linecap="round"/><circle cx="15" cy="15" r="3" fill="none"/><path d="M14 15l1 1 2-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nav-label">עורך עריכה אנליטי</span>
             </a>
             <a class="nav-link" href="#" data-page="about" title="אודות">
                 <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 7v.5" stroke-linecap="round"/></svg>
@@ -641,8 +646,87 @@
             </section>
         </div>
 
+        <!-- ══ PAGE: עורך עריכה אנליטי ══ -->
+        <div id="page-analyzer" class="page" style="display:none">
+            <header class="page-header centered-header">
+                <div>
+                    <div class="header-ornament">✦ ✡ ✦</div>
+                    <h1 class="page-title">עורך <span>עריכה</span> אנליטי</h1>
+                    <p class="page-sub">זיהוי ר"ת, בדיקת סוגריים ועקביות כתיב — עם קבלת החלטות אינטראקטיבית</p>
+                    <div class="gold-line"></div>
+                </div>
+            </header>
+
+            <!-- קלט -->
+            <section class="panel">
+                <div class="panel-title"><div class="panel-icon">📝</div>טקסט לניתוח</div>
+                <textarea id="analyzerInput" class="paste-textarea" style="min-height:200px;font-family:'Frank Ruhl Libre',serif;font-size:15px" placeholder="הדבק כאן את הטקסט לניתוח..."></textarea>
+
+                <div class="analyzer-toolbar" style="margin-top:12px">
+                    <div>
+                        <span class="field-label" style="margin-left:10px">סוג סוגריים:</span>
+                        <label class="bracket-opt"><input type="radio" name="analyzerBrackets" value="curly" checked /><span class="bracket-btn">{&nbsp;}</span>מסולסל</label>
+                        <label class="bracket-opt"><input type="radio" name="analyzerBrackets" value="round" /><span class="bracket-btn">(&nbsp;)</span>עגול</label>
+                        <label class="bracket-opt"><input type="radio" name="analyzerBrackets" value="square" /><span class="bracket-btn">[&nbsp;]</span>מרובע</label>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-right:auto">
+                        <button id="analyzerRunBtn" class="run-btn" style="max-width:180px">
+                            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+                            סרוק ונתח
+                        </button>
+                        <button id="analyzerClearBtn" class="browse-btn" title="נקה">✕ נקה</button>
+                    </div>
+                </div>
+                <div id="analyzerStatus" class="status-bar error" style="display:none;margin-top:8px"></div>
+            </section>
+
+            <!-- תוצאות -->
+            <div id="analyzerResults" style="display:none">
+                <!-- KPIs -->
+                <section class="panel">
+                    <div class="panel-title"><div class="panel-icon">📊</div>סיכום ממצאים</div>
+                    <div class="analyzer-kpis" id="analyzerKpis"></div>
+                </section>
+
+                <!-- טבלה -->
+                <section class="panel">
+                    <div class="panel-title"><div class="panel-icon">🔬</div>פרטי הניתוח</div>
+
+                    <!-- פילטרים -->
+                    <div class="analyzer-filter-bar" id="analyzerFilterBar">
+                        <span class="field-label" style="margin-left:6px">סנן:</span>
+                        <button class="filter-chip active" data-sev="all">הכל</button>
+                        <button class="filter-chip chip-error" data-sev="error">שגיאות בלבד</button>
+                        <button class="filter-chip chip-warning" data-sev="warning">אזהרות בלבד</button>
+                        <button class="filter-chip chip-ok" data-sev="ok">תקין בלבד</button>
+                    </div>
+
+                    <div class="analyzer-table-wrap">
+                        <table class="analyzer-table" id="analyzerTable">
+                            <thead>
+                                <tr>
+                                    <th style="width:110px">מיקום</th>
+                                    <th>קטע</th>
+                                    <th style="width:220px">ניתוח</th>
+                                    <th style="width:220px">פעולה</th>
+                                </tr>
+                            </thead>
+                            <tbody id="analyzerTbody"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- ייצוא -->
+                    <div class="analyzer-action-bar">
+                        <button id="analyzerExportCsv" class="browse-btn">📥 ייצא CSV</button>
+                        <button id="analyzerExportTxt" class="browse-btn">📄 ייצא טקסט מתוקן</button>
+                    </div>
+                </section>
+            </div>
+        </div>
+
     </main>
 </div>
 <script src="main.js"></script>
+<script src="analyzer.js"></script>
 </body>
 </html>

@@ -1,0 +1,277 @@
+/* =====================================================
+   עורך עריכה אנליטי — analyzer panel
+   ===================================================== */
+
+/* ── toolbar ── */
+.analyzer-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.analyzer-toolbar .field-input { max-width: 220px; }
+
+/* ── status counts ── */
+.analyzer-kpis {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.analyzer-kpi {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 10px 18px;
+    text-align: center;
+    min-width: 100px;
+}
+.analyzer-kpi-val {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: 'Frank Ruhl Libre', serif;
+    color: var(--gold);
+}
+.analyzer-kpi-label {
+    font-size: 11px;
+    color: var(--text-2);
+    margin-top: 2px;
+}
+.analyzer-kpi.kpi-red   .analyzer-kpi-val { color: var(--red); }
+.analyzer-kpi.kpi-yellow .analyzer-kpi-val { color: #d4a843; }
+.analyzer-kpi.kpi-green .analyzer-kpi-val { color: var(--green); }
+
+/* ── table wrapper ── */
+.analyzer-table-wrap {
+    overflow-x: auto;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+}
+.analyzer-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    direction: rtl;
+}
+.analyzer-table thead th {
+    background: rgba(212,179,102,0.08);
+    color: var(--gold);
+    font-weight: 600;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border2);
+    text-align: right;
+    white-space: nowrap;
+}
+.analyzer-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background var(--ease);
+}
+.analyzer-table tbody tr:hover { background: rgba(212,179,102,0.05); }
+
+/* severity row coloring */
+.analyzer-table tbody tr.sev-error   { border-right: 3px solid var(--red); }
+.analyzer-table tbody tr.sev-warning { border-right: 3px solid #d4a843; }
+.analyzer-table tbody tr.sev-ok      { border-right: 3px solid var(--green); }
+
+.analyzer-table td {
+    padding: 9px 12px;
+    vertical-align: middle;
+    color: var(--text);
+}
+
+/* location cell */
+.analyzer-loc {
+    font-size: 12px;
+    color: var(--text-2);
+    font-family: monospace;
+    white-space: nowrap;
+}
+
+/* text snippet */
+.analyzer-snippet {
+    font-family: 'Frank Ruhl Libre', serif;
+    font-size: 14px;
+    max-width: 320px;
+    cursor: pointer;
+    position: relative;
+}
+.analyzer-snippet mark {
+    background: rgba(212,179,102,0.25);
+    color: var(--gold-light);
+    border-radius: 3px;
+    padding: 0 2px;
+}
+
+/* badge */
+.sev-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+.sev-badge.error   { background: var(--red-dim);   color: var(--red-light); }
+.sev-badge.warning { background: rgba(212,168,67,0.15); color: #e8c060; }
+.sev-badge.ok      { background: var(--green-dim);  color: var(--green-light); }
+
+/* reason tooltip */
+.analyzer-reason {
+    font-size: 12px;
+    color: var(--text-2);
+    max-width: 220px;
+}
+
+/* action cell */
+.analyzer-action-cell {
+    white-space: nowrap;
+    min-width: 180px;
+}
+.action-radios {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.action-radio-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-2);
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    transition: all var(--ease);
+}
+.action-radio-label:has(input:checked) {
+    border-color: var(--gold);
+    color: var(--gold);
+    background: var(--gold-dim);
+}
+.action-radio-label input { display: none; }
+
+/* replacement input */
+.replacement-wrap {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    animation: fadeIn 0.15s ease;
+}
+.replacement-input {
+    width: 130px;
+    padding: 4px 8px;
+    background: var(--cream);
+    border: 1px solid var(--border2);
+    border-radius: var(--r-xs);
+    color: var(--text);
+    font-size: 12px;
+    direction: rtl;
+    font-family: 'Frank Ruhl Libre', serif;
+}
+.replacement-input:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 2px var(--gold-dim);
+}
+.apply-btn {
+    padding: 4px 10px;
+    background: var(--gold-dim);
+    border: 1px solid var(--gold-border);
+    color: var(--gold);
+    border-radius: var(--r-xs);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--ease);
+    white-space: nowrap;
+}
+.apply-btn:hover { background: rgba(212,179,102,0.22); }
+.apply-btn.applied {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green-light);
+}
+
+/* ── export / action bar ── */
+.analyzer-action-bar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    align-items: center;
+}
+.analyzer-action-bar .browse-btn { font-size: 13px; }
+
+/* ── empty / loading states ── */
+.analyzer-empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-3);
+    font-size: 15px;
+}
+.analyzer-empty .empty-icon { font-size: 36px; margin-bottom: 10px; }
+
+/* ── tooltip context popup ── */
+.ctx-popup {
+    position: fixed;
+    z-index: 999;
+    background: var(--panel-bg);
+    border: 1px solid var(--border2);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow-lg);
+    padding: 12px 16px;
+    max-width: 420px;
+    font-family: 'Frank Ruhl Libre', serif;
+    font-size: 14px;
+    line-height: 1.8;
+    direction: rtl;
+    color: var(--text);
+    pointer-events: none;
+    animation: fadeIn 0.15s ease;
+}
+.ctx-popup mark {
+    background: rgba(212,179,102,0.3);
+    color: var(--gold-light);
+    border-radius: 3px;
+    padding: 0 2px;
+}
+.ctx-popup-label {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-bottom: 6px;
+    font-family: 'Heebo', sans-serif;
+}
+
+/* ── filter bar ── */
+.analyzer-filter-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.filter-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-2);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--ease);
+}
+.filter-chip:hover  { border-color: var(--gold); color: var(--gold); }
+.filter-chip.active { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
+.filter-chip.chip-error.active   { background: var(--red-dim); border-color: var(--red); color: var(--red-light); }
+.filter-chip.chip-warning.active { background: rgba(212,168,67,0.15); border-color: #d4a843; color: #e8c060; }
+.filter-chip.chip-ok.active      { background: var(--green-dim); border-color: var(--green); color: var(--green-light); }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* light-mode overrides */
+body.light-mode .replacement-input {
+    background: #f5f0e8;
+    color: #2a2418;
+}
+body.light-mode .analyzer-table tbody tr:hover { background: rgba(212,179,102,0.07); }
