@@ -56,7 +56,7 @@
             </a>
         </nav>
         <div class="sidebar-bottom">
-            <span class="nav-label">v4.6.0 · U88-1 · Tauri</span>
+            <span class="nav-label">v4.6.1 · U88-1 · Tauri</span>
         </div>
         <!-- כפתור קיפול -->
         <button id="sidebarToggle" class="sidebar-toggle-btn" title="קפל/פתח סרגל">
@@ -436,7 +436,7 @@
             <section class="panel about-panel">
                 <div class="about-logo">📖</div>
                 <div class="about-title">בודק מקורות</div>
-                <div class="about-version" id="aboutVersionDisplay">גרסה 4.4.3 · U88-1 · Tauri</div>
+                <div class="about-version" id="aboutVersionDisplay">גרסה 4.6.1 · U88-1 · Tauri</div>
                 <div class="about-desc">
                     <p>תוכנה לבדיקת הפניות למקורות בספרות התורנית.</p>
                     <p>התוכנה מאתרת הפניות בתוך קבצי טקסט, Word ו-PDF, ומשווה אותן מול מסד הנתונים של אוצריא ומול Sefaria.org.</p>
@@ -447,7 +447,19 @@
                     <div class="changelog-title">📋 שינויי גרסאות</div>
                     <div class="changelog-list" id="changelogList">
                         <div class="changelog-item">
-                            <div class="changelog-ver">v4.4.3 — נוכחי</div>
+                            <div class="changelog-ver">v4.6.1 — נוכחי</div>
+                            <ul>
+                                <li>ביצועים: הפניות חוזרות נשלחות פעם אחת בלבד — חיסכון משמעותי בשאילתות DB</li>
+                                <li>תג × N בכרטיס — מציג כמה פעמים מופיעה הפניה במסמך</li>
+                                <li>הצגת כל ההקשרים (משפטים) של כל הופעה בנפרד</li>
+                                <li>טאב חדש: עורך עריכה אנליטי — זיהוי ר"ת, בדיקת סוגריים, עקביות כתיב ו-HITL</li>
+                                <li>ביצועים: MAX_SCAN_WORKERS גדל ל-32 (מנצל את כל ליבות ה-CPU)</li>
+                                <li>ביצועים: mmap 1GB, cache 128MB, threads 8, opt-level=3</li>
+                                <li>ביצועים: strip_tags עם early-exit כשאין תגיות HTML</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-item">
+                            <div class="changelog-ver">v4.4.3</div>
                             <ul>
                                 <li>תיקון: מפתח Gemini לא תמיד נשמר (הוחלף לשמירה על כל הקלדה + רשת ביטחון לפני הרצה)</li>
                                 <li>תיקון: זיהוי "חלק"/"פרק" תפס בטעות ביטויים רגילים כמו "חלק לעולם הבא"</li>
